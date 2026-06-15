@@ -3,122 +3,386 @@
 <head>
   <meta charset="UTF-8" />
   <title>Piano Teacher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&family=Lato:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: #0a0a12;
-      color: #ccccdd;
-      font-family: Arial, sans-serif;
-      min-height: 100vh;
-      padding: 48px 20px;
-    }
-    .container { max-width: 680px; margin: 0 auto; }
 
-    h1 { font-size: 26px; color: #ffffff; margin-bottom: 6px; }
-    .subtitle { color: #44445a; font-size: 14px; margin-bottom: 40px; }
+    body {
+      background: linear-gradient(135deg, #fff8f5 0%, #f5f0ff 50%, #f0f8ff 100%);
+      background-attachment: fixed;
+      color: #2d2040;
+      font-family: 'Lato', sans-serif;
+      min-height: 100vh;
+      padding: 52px 20px;
+    }
+
+    /* subtle music-note watermark */
+    body::before {
+      content: '𝄞';
+      position: fixed;
+      bottom: -40px;
+      right: 30px;
+      font-size: 340px;
+      color: rgba(160, 110, 220, 0.06);
+      pointer-events: none;
+      line-height: 1;
+      user-select: none;
+    }
+
+    .container { max-width: 740px; margin: 0 auto; position: relative; }
+
+    h1 {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 34px;
+      color: #2d2040;
+      margin-bottom: 6px;
+      letter-spacing: -0.5px;
+    }
+    .subtitle {
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      color: #9580b0;
+      font-size: 14px;
+      margin-bottom: 36px;
+    }
+
+    /* ── Tabs ── */
+    .tabs { display: flex; gap: 6px; margin-bottom: 0; }
+    .tab {
+      padding: 10px 24px;
+      border-radius: 10px 10px 0 0;
+      font-size: 14px;
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      font-weight: 700;
+      cursor: pointer;
+      background: rgba(255,255,255,0.4);
+      color: #b0a0c8;
+      border: 1px solid rgba(180,150,220,0.25);
+      border-bottom: none;
+      transition: all 0.2s;
+      backdrop-filter: blur(6px);
+    }
+    .tab.active {
+      background: rgba(255,255,255,0.92);
+      color: #6c3fc5;
+      border-color: rgba(180,150,220,0.4);
+    }
+    .tab-panel {
+      display: none;
+      background: rgba(255,255,255,0.88);
+      border: 1px solid rgba(180,150,220,0.3);
+      border-radius: 0 10px 10px 10px;
+      padding: 26px;
+      margin-bottom: 28px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 32px rgba(120, 80, 200, 0.07);
+    }
+    .tab-panel.active { display: block; }
+
+    /* ── Search ── */
+    .search-row { display: flex; gap: 10px; margin-bottom: 20px; }
+    .search-input {
+      flex: 1;
+      background: #f8f4ff;
+      border: 1.5px solid #d4bfee;
+      border-radius: 10px;
+      padding: 11px 16px;
+      color: #2d2040;
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .search-input:focus {
+      border-color: #8b5cf6;
+      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.12);
+    }
+    .search-input::placeholder { color: #c4b5d8; }
+
+    /* ── Buttons ── */
+    .btn {
+      background: linear-gradient(135deg, #8b5cf6, #a855f7);
+      color: #fff;
+      border: none;
+      padding: 11px 24px;
+      border-radius: 10px;
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      box-shadow: 0 4px 14px rgba(139, 92, 246, 0.3);
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
+    }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled {
+      background: #e8e0f0;
+      color: #b0a0c8;
+      box-shadow: none;
+      cursor: default;
+      transform: none;
+    }
+
+    /* ── Result cards ── */
+    .results { display: flex; flex-direction: column; gap: 12px; }
+    .result-card {
+      background: rgba(255,255,255,0.7);
+      border: 1px solid rgba(180,150,220,0.2);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      transition: all 0.22s ease;
+      box-shadow: 0 2px 10px rgba(120,80,200,0.05);
+    }
+    .result-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 10px 30px rgba(120,80,200,0.14);
+      border-color: rgba(139,92,246,0.3);
+    }
+    .result-thumb {
+      width: 112px; height: 63px;
+      border-radius: 8px;
+      object-fit: cover;
+      flex-shrink: 0;
+      background: #ede8f8;
+    }
+    .result-info { flex: 1; min-width: 0; }
+    .result-title {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 15px;
+      color: #2d2040;
+      margin-bottom: 3px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .result-meta {
+      font-size: 12px;
+      font-style: italic;
+      color: #9580b0;
+      margin-bottom: 10px;
+    }
+    .result-audio { width: 100%; height: 32px; margin-bottom: 8px; display: none; }
+    .result-audio.show { display: block; }
+    .result-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-sm {
+      padding: 5px 14px; border-radius: 7px;
+      font-size: 12px; font-family: 'Lato', sans-serif;
+      font-style: italic; font-weight: 700;
+      cursor: pointer; transition: all 0.18s;
+    }
+    .btn-preview {
+      background: #f3eeff;
+      color: #8b5cf6;
+      border: 1px solid #d4bfee;
+    }
+    .btn-preview:hover { background: #e8d8ff; box-shadow: 0 2px 8px rgba(139,92,246,0.15); }
+    .btn-preview.loading { color: #a855f7; }
+    .btn-use {
+      background: linear-gradient(135deg, #f0abfc, #818cf8);
+      color: #fff;
+      border: none;
+      box-shadow: 0 3px 10px rgba(168,85,247,0.25);
+    }
+    .btn-use:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 5px 16px rgba(168,85,247,0.35);
+    }
 
     /* ── Upload card ── */
     .upload-card {
-      background: #12121a;
-      border: 2px dashed #252535;
-      border-radius: 12px;
-      padding: 40px;
+      border: 2px dashed #d4bfee;
+      border-radius: 14px;
+      padding: 44px;
       text-align: center;
       cursor: pointer;
-      transition: border-color 0.15s;
-      margin-bottom: 20px;
+      transition: all 0.22s;
+      background: rgba(248,244,255,0.5);
     }
-    .upload-card:hover, .upload-card.dragover { border-color: #5096ff; }
-    .upload-icon { font-size: 40px; margin-bottom: 14px; }
-    .upload-card h2 { font-size: 17px; color: #eeeeff; margin-bottom: 6px; }
-    .upload-card p  { font-size: 13px; color: #44445a; margin-bottom: 22px; }
+    .upload-card:hover, .upload-card.dragover {
+      border-color: #8b5cf6;
+      background: rgba(248,244,255,0.85);
+      box-shadow: 0 8px 28px rgba(139,92,246,0.12);
+      transform: translateY(-2px);
+    }
+    .upload-icon { font-size: 44px; margin-bottom: 14px; }
+    .upload-card h2 {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 18px;
+      color: #2d2040;
+      margin-bottom: 6px;
+    }
+    .upload-card p  {
+      font-style: italic;
+      font-size: 13px;
+      color: #9580b0;
+      margin-bottom: 22px;
+    }
     #fileInput { display: none; }
-    .btn {
-      background: #5096ff;
-      color: #fff;
-      border: none;
-      padding: 10px 26px;
-      border-radius: 6px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .btn:hover { background: #6aaaff; }
 
     /* ── Status bar ── */
     #status {
-      background: #12121a;
-      border-radius: 8px;
+      background: rgba(255,255,255,0.88);
+      border: 1px solid rgba(180,150,220,0.3);
+      border-radius: 10px;
       padding: 14px 18px;
-      margin-bottom: 24px;
+      margin-bottom: 28px;
       display: none;
       align-items: center;
       gap: 12px;
+      box-shadow: 0 4px 16px rgba(120,80,200,0.08);
+      backdrop-filter: blur(8px);
     }
     #status.show { display: flex; }
     .spinner {
       width: 16px; height: 16px; flex-shrink: 0;
-      border: 2px solid #252535;
-      border-top-color: #5096ff;
+      border: 2px solid #e8d8ff;
+      border-top-color: #8b5cf6;
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    #statusText { font-size: 13px; color: #8888aa; flex: 1; }
-    #statusText.ok  { color: #50f078; }
-    #statusText.err { color: #ff5555; }
-    #playNew {
-      background: #50f078;
-      color: #0a0a12;
-      border: none;
-      padding: 7px 16px;
-      border-radius: 6px;
+    #statusText {
+      font-style: italic;
       font-size: 13px;
-      font-weight: bold;
+      color: #9580b0;
+      flex: 1;
+    }
+    #statusText.ok  { color: #059669; }
+    #statusText.err { color: #dc2626; }
+    #playNew {
+      background: linear-gradient(135deg, #34d399, #059669);
+      color: #fff;
+      border: none;
+      padding: 7px 18px;
+      border-radius: 8px;
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      font-weight: 700;
+      font-size: 13px;
       cursor: pointer;
       display: none;
+      box-shadow: 0 3px 10px rgba(5,150,105,0.3);
+      transition: all 0.2s;
     }
-    #playNew:hover { background: #70ff96; }
+    #playNew:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 5px 16px rgba(5,150,105,0.4);
+    }
 
     /* ── File list ── */
     .section-label {
-      font-size: 11px;
-      letter-spacing: 1.2px;
-      text-transform: uppercase;
-      color: #33334a;
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 13px;
+      letter-spacing: 1px;
+      color: #b0a0c8;
       margin-bottom: 14px;
     }
-    .file-list { display: flex; flex-direction: column; gap: 8px; }
+    .file-list { display: flex; flex-direction: column; gap: 10px; }
+
+    /* rotating gradient palette for file cards */
     .file-item {
-      background: #12121a;
-      border-radius: 8px;
-      padding: 13px 18px;
+      border-radius: 12px;
+      padding: 14px 18px;
       display: flex;
       align-items: center;
       gap: 14px;
+      transition: all 0.22s ease;
+      cursor: default;
+      position: relative;
+      overflow: hidden;
     }
+    .file-item::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transition: opacity 0.22s;
+      border-radius: inherit;
+    }
+    .file-item:hover { transform: translateY(-3px); }
+    .file-item:hover::before { opacity: 1; }
+
+    .file-item:nth-child(5n+1) { background: linear-gradient(135deg, #fdf4ff, #f3e8ff); border: 1px solid #e9d5ff; box-shadow: 0 2px 12px rgba(167,139,250,0.12); }
+    .file-item:nth-child(5n+1):hover { box-shadow: 0 8px 28px rgba(167,139,250,0.28); }
+
+    .file-item:nth-child(5n+2) { background: linear-gradient(135deg, #fff0f6, #ffe4ef); border: 1px solid #fbcfe8; box-shadow: 0 2px 12px rgba(236,72,153,0.1); }
+    .file-item:nth-child(5n+2):hover { box-shadow: 0 8px 28px rgba(236,72,153,0.22); }
+
+    .file-item:nth-child(5n+3) { background: linear-gradient(135deg, #f0fdfa, #d1fae5); border: 1px solid #99f6e4; box-shadow: 0 2px 12px rgba(20,184,166,0.1); }
+    .file-item:nth-child(5n+3):hover { box-shadow: 0 8px 28px rgba(20,184,166,0.22); }
+
+    .file-item:nth-child(5n+4) { background: linear-gradient(135deg, #fff7ed, #ffedd5); border: 1px solid #fed7aa; box-shadow: 0 2px 12px rgba(249,115,22,0.1); }
+    .file-item:nth-child(5n+4):hover { box-shadow: 0 8px 28px rgba(249,115,22,0.2); }
+
+    .file-item:nth-child(5n+5) { background: linear-gradient(135deg, #eff6ff, #dbeafe); border: 1px solid #bfdbfe; box-shadow: 0 2px 12px rgba(59,130,246,0.1); }
+    .file-item:nth-child(5n+5):hover { box-shadow: 0 8px 28px rgba(59,130,246,0.22); }
+
     .file-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #3270dc; flex-shrink: 0;
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
     }
-    .file-name { flex: 1; font-size: 14px; color: #ddddee; }
-    .file-size { font-size: 12px; color: #33334a; margin-right: 6px; }
+    .file-item:nth-child(5n+1) .file-dot { background: #a855f7; box-shadow: 0 0 8px rgba(168,85,247,0.5); }
+    .file-item:nth-child(5n+2) .file-dot { background: #ec4899; box-shadow: 0 0 8px rgba(236,72,153,0.5); }
+    .file-item:nth-child(5n+3) .file-dot { background: #14b8a6; box-shadow: 0 0 8px rgba(20,184,166,0.5); }
+    .file-item:nth-child(5n+4) .file-dot { background: #f97316; box-shadow: 0 0 8px rgba(249,115,22,0.5); }
+    .file-item:nth-child(5n+5) .file-dot { background: #3b82f6; box-shadow: 0 0 8px rgba(59,130,246,0.5); }
+
+    .file-name {
+      flex: 1;
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 14px;
+      color: #2d2040;
+    }
+    .file-size { font-size: 12px; font-style: italic; color: #b0a0c8; margin-right: 6px; }
+
     .btn-play {
-      background: #1e3a60;
-      color: #5096ff;
-      border: 1px solid #2a4a80;
+      background: rgba(255,255,255,0.7);
+      color: #6c3fc5;
+      border: 1px solid rgba(139,92,246,0.25);
       padding: 6px 16px;
-      border-radius: 6px;
+      border-radius: 8px;
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      font-weight: 700;
       font-size: 13px;
-      font-weight: bold;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: all 0.18s;
+      backdrop-filter: blur(4px);
     }
-    .btn-play:hover { background: #5096ff; color: #fff; }
+    .btn-play:hover {
+      background: linear-gradient(135deg, #8b5cf6, #a855f7);
+      color: #fff;
+      border-color: transparent;
+      box-shadow: 0 4px 14px rgba(139,92,246,0.35);
+      transform: scale(1.04);
+    }
+
     .empty {
       text-align: center;
-      color: #252535;
+      font-style: italic;
+      color: #c4b5d8;
       padding: 36px;
+      font-size: 14px;
+    }
+    .search-hint {
+      text-align: center;
+      font-style: italic;
+      color: #b0a0c8;
+      padding: 24px;
       font-size: 14px;
     }
   </style>
@@ -126,15 +390,35 @@
 <body>
 <div class="container">
   <h1>🎹 Piano Teacher</h1>
-  <p class="subtitle">Upload an audio recording to generate a playable piano game</p>
+  <p class="subtitle">Search for a song or upload your own audio to generate a playable piano game</p>
 
-  <!-- Upload -->
-  <div class="upload-card" id="dropZone">
-    <div class="upload-icon">🎵</div>
-    <h2>Drop an audio file here</h2>
-    <p>MP3, WAV, FLAC, M4A — right-hand part is extracted automatically</p>
-    <input type="file" id="fileInput" accept="audio/*" />
-    <button class="btn" onclick="document.getElementById('fileInput').click()">Browse File</button>
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" id="tab-search" onclick="switchTab('search')">🔍 Search YouTube</div>
+    <div class="tab"        id="tab-upload" onclick="switchTab('upload')">📁 Upload File</div>
+  </div>
+
+  <!-- Search panel -->
+  <div class="tab-panel active" id="panel-search">
+    <div class="search-row">
+      <input class="search-input" id="searchInput" type="text"
+             placeholder="e.g. Fur Elise, River Flows in You, Clair de Lune…" />
+      <button class="btn" id="searchBtn" onclick="doSearch()">Search</button>
+    </div>
+    <div id="searchResults" class="results">
+      <div class="search-hint">✨ Type a song name and press Search — top 5 piano covers will appear here</div>
+    </div>
+  </div>
+
+  <!-- Upload panel -->
+  <div class="tab-panel" id="panel-upload">
+    <div class="upload-card" id="dropZone">
+      <div class="upload-icon">🎵</div>
+      <h2>Drop an audio file here</h2>
+      <p>MP3, WAV, FLAC, M4A — right-hand part is extracted automatically</p>
+      <input type="file" id="fileInput" accept="audio/*" />
+      <button class="btn" onclick="document.getElementById('fileInput').click()">Browse File</button>
+    </div>
   </div>
 
   <!-- Status -->
@@ -145,49 +429,132 @@
   </div>
 
   <!-- File list -->
-  <div class="section-label">Processed Files</div>
+  <div class="section-label">♩ Processed Files</div>
   <div class="file-list" id="fileList">
-    <div class="empty">No files yet. Upload an audio file to begin.</div>
+    <div class="empty">No files yet — search or upload a song to begin.</div>
   </div>
 </div>
 
 <script>
-const dropZone   = document.getElementById('dropZone');
-const fileInput  = document.getElementById('fileInput');
+// ─── Tabs ─────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  ['search', 'upload'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('active', t === name);
+    document.getElementById(`panel-${t}`).classList.toggle('active', t === name);
+  });
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function fmtDuration(s) {
+  if (!s) return '';
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function escAttr(s) {
+  return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ─── Search ───────────────────────────────────────────────────────────────────
+const searchInput   = document.getElementById('searchInput');
+const searchBtn     = document.getElementById('searchBtn');
+const searchResults = document.getElementById('searchResults');
+
+searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+async function doSearch() {
+  const q = searchInput.value.trim();
+  if (!q) return;
+  searchBtn.disabled = true;
+  searchBtn.textContent = 'Searching…';
+  searchResults.innerHTML = '<div class="search-hint">🎼 Searching YouTube…</div>';
+
+  try {
+    const { results, error } = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+    if (error) throw new Error(error);
+    if (!results || !results.length) {
+      searchResults.innerHTML = '<div class="search-hint">No results found. Try a different song name.</div>';
+      return;
+    }
+    searchResults.innerHTML = results.map((r, i) => `
+      <div class="result-card">
+        <img class="result-thumb" src="${escAttr(r.thumbnail)}" alt=""
+             onerror="this.style.visibility='hidden'" />
+        <div class="result-info">
+          <div class="result-title" title="${escAttr(r.title)}">${r.title}</div>
+          <div class="result-meta">${r.channel || ''}${r.duration ? ' · ' + fmtDuration(r.duration) : ''}</div>
+          <audio class="result-audio" id="audio-${i}" controls></audio>
+          <div class="result-actions">
+            <button class="btn-sm btn-preview" id="prev-${i}"
+                    onclick="loadPreview(${i}, '${escAttr(r.id)}')">▶ Preview 30s</button>
+            <button class="btn-sm btn-use"
+                    onclick="useYouTube('${escAttr(r.url)}', '${escAttr(r.title)}')">Use this ↗</button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    searchResults.innerHTML = `<div class="search-hint">Error: ${e.message}</div>`;
+  } finally {
+    searchBtn.disabled = false;
+    searchBtn.textContent = 'Search';
+  }
+}
+
+async function loadPreview(idx, videoId) {
+  const btn   = document.getElementById(`prev-${idx}`);
+  const audio = document.getElementById(`audio-${idx}`);
+  if (audio.src) { audio.classList.toggle('show'); return; }
+  btn.textContent = '⏳ Loading…';
+  btn.classList.add('loading');
+  audio.src = `/api/preview/${videoId}`;
+  audio.classList.add('show');
+  audio.oncanplay = () => {
+    btn.textContent = '▶ Preview 30s';
+    btn.classList.remove('loading');
+    audio.play();
+  };
+  audio.onerror = () => {
+    btn.textContent = '✗ Preview failed';
+    btn.classList.remove('loading');
+    audio.classList.remove('show');
+  };
+}
+
+async function useYouTube(url, title) {
+  const { task_id } = await fetch('/api/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, title }),
+  }).then(r => r.json());
+  showStatus('Downloading from YouTube…');
+  pollStatus(task_id);
+}
+
+// ─── Upload ───────────────────────────────────────────────────────────────────
+const dropZone  = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+fileInput.addEventListener('change', e => { if (e.target.files[0]) processFile(e.target.files[0]); });
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]);
+});
+
+async function processFile(file) {
+  showStatus(`Uploading ${file.name}…`);
+  const form = new FormData();
+  form.append('file', file);
+  const { task_id } = await fetch('/upload', { method: 'POST', body: form }).then(r => r.json());
+  pollStatus(task_id);
+}
+
+// ─── Status & polling ─────────────────────────────────────────────────────────
 const statusEl   = document.getElementById('status');
 const statusText = document.getElementById('statusText');
 const spinner    = document.getElementById('spinner');
 const playNew    = document.getElementById('playNew');
-const fileList   = document.getElementById('fileList');
-
-// ─── File list ────────────────────────────────────────────────────────────────
-
-async function loadFiles() {
-  const { files } = await fetch('/api/files').then(r => r.json());
-  if (!files.length) {
-    fileList.innerHTML = '<div class="empty">No files yet. Upload an audio file to begin.</div>';
-    return;
-  }
-  fileList.innerHTML = files.map(f => `
-    <div class="file-item">
-      <div class="file-dot"></div>
-      <span class="file-name">${f.name}</span>
-      <span class="file-size">${(f.size / 1024).toFixed(1)} KB</span>
-      <button class="btn-play" onclick="playFile('${f.name}')">▶ Play</button>
-    </div>
-  `).join('');
-}
-
-async function playFile(name) {
-  await fetch('/load', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file: name }),
-  });
-  window.location.href = '/game';
-}
-
-// ─── Upload pipeline ──────────────────────────────────────────────────────────
 
 function showStatus(text, type = 'loading', file = null) {
   statusEl.classList.add('show');
@@ -203,20 +570,11 @@ function showStatus(text, type = 'loading', file = null) {
   }
 }
 
-async function processFile(file) {
-  showStatus(`Uploading ${file.name}…`);
-
-  const form = new FormData();
-  form.append('file', file);
-  const { task_id } = await fetch('/upload', { method: 'POST', body: form }).then(r => r.json());
-
+async function pollStatus(task_id) {
   while (true) {
     await new Promise(r => setTimeout(r, 2500));
     const s = await fetch(`/status/${task_id}`).then(r => r.json());
-
-    if (s.step && s.status === 'processing') {
-      showStatus(s.step);
-    }
+    if (s.step && s.status === 'processing') showStatus(s.step);
     if (s.status === 'done') {
       showStatus(
         `✓ ${s.file}  ·  Key: ${s.key}  ·  ${s.notes} notes  ·  avg. ${s.median_duration}s/note`,
@@ -225,24 +583,37 @@ async function processFile(file) {
       loadFiles();
       break;
     }
-    if (s.status === 'error') {
-      showStatus(`Error: ${s.error}`, 'err');
-      break;
-    }
+    if (s.status === 'error') { showStatus(`Error: ${s.error}`, 'err'); break; }
   }
 }
 
-fileInput.addEventListener('change', e => {
-  if (e.target.files[0]) processFile(e.target.files[0]);
-});
-dropZone.addEventListener('dragover', e => {
-  e.preventDefault(); dropZone.classList.add('dragover');
-});
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault(); dropZone.classList.remove('dragover');
-  if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]);
-});
+// ─── File list ────────────────────────────────────────────────────────────────
+const fileList = document.getElementById('fileList');
+
+async function loadFiles() {
+  const { files } = await fetch('/api/files').then(r => r.json());
+  if (!files.length) {
+    fileList.innerHTML = '<div class="empty">No files yet — search or upload a song to begin.</div>';
+    return;
+  }
+  fileList.innerHTML = files.map(f => `
+    <div class="file-item">
+      <div class="file-dot"></div>
+      <span class="file-name">${f.name}</span>
+      <span class="file-size">${(f.size / 1024).toFixed(1)} KB</span>
+      <button class="btn-play" onclick="playFile('${escAttr(f.name)}')">▶ Play</button>
+    </div>
+  `).join('');
+}
+
+async function playFile(name) {
+  await fetch('/load', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: name }),
+  });
+  window.location.href = '/game';
+}
 
 loadFiles();
 </script>

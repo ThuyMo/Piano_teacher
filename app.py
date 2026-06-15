@@ -7,6 +7,8 @@ import asyncio
 import json
 import os
 import queue
+import re
+import subprocess
 import threading
 import uuid
 from pathlib import Path
@@ -20,7 +22,7 @@ from pydantic import BaseModel
 
 from model.input_processor import convert_audio_to_midi
 from model.midi_processor import extract_right_hand
-from model.helper import chord_detector, mid_to_pd
+from model.helper import chord_detector, mid_to_pd, pd_to_str, str_to_mid, transpose
 
 BASE_DIR     = Path(__file__).parent
 ARTIFACT_DIR = BASE_DIR / "artifact"
@@ -96,6 +98,54 @@ def _reset_game(path: str) -> None:
     g_hit      = set()
 
 
+# ─── yt-dlp helpers ───────────────────────────────────────────────────────────
+
+def _yt_search(query: str) -> list:
+    result = subprocess.run(
+        ["yt-dlp", f"ytsearch5:{query} piano",
+         "--dump-json", "--flat-playlist", "--quiet", "--no-warnings"],
+        capture_output=True, text=True, timeout=30
+    )
+    entries = []
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            video_id = data.get("id", "")
+            if not video_id:
+                continue
+            entries.append({
+                "id": video_id,
+                "title": data.get("title", "Unknown"),
+                "duration": data.get("duration"),
+                "channel": data.get("channel") or data.get("uploader", ""),
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+            })
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return entries
+
+
+def _download_preview(video_id: str, output_path: str) -> None:
+    subprocess.run(
+        ["yt-dlp", f"https://www.youtube.com/watch?v={video_id}",
+         "--download-sections", "*0-30",
+         "-x", "--audio-format", "mp3",
+         "-o", output_path, "--quiet", "--no-warnings"],
+        check=True, timeout=60
+    )
+
+
+def _download_audio(url: str, output_path: str) -> None:
+    subprocess.run(
+        ["yt-dlp", url, "-x", "--audio-format", "mp3",
+         "-o", output_path, "--quiet", "--no-warnings"],
+        check=True, timeout=300
+    )
+
+
 # ─── Background task tracking ────────────────────────────────────────────────
 
 tasks: dict = {}  # task_id -> {"status": ..., ...}
@@ -134,6 +184,10 @@ async def list_files():
 class LoadRequest(BaseModel):
     file: str
 
+class DownloadRequest(BaseModel):
+    url: str
+    title: str = ""
+
 
 @app.post("/load")
 async def load_file(req: LoadRequest):
@@ -144,44 +198,98 @@ async def load_file(req: LoadRequest):
     return JSONResponse({"ok": True})
 
 
+async def _run_pipeline(input_path: Path, task_id: str) -> None:
+    try:
+        tasks[task_id]["step"] = "Converting audio to MIDI (ffmpeg + transkun)..."
+        midi_path = await asyncio.to_thread(convert_audio_to_midi, str(input_path))
+
+        tasks[task_id]["step"] = "Splitting hands..."
+        rh_path = await asyncio.to_thread(extract_right_hand, str(midi_path))
+
+        tasks[task_id]["step"] = "Detecting key and transposing..."
+        tonic, mode = await asyncio.to_thread(chord_detector, str(rh_path))
+        target = "Am" if mode == "minor" else "C"
+        transposed_path = await asyncio.to_thread(
+            transpose, str(rh_path), target,
+            str(ARTIFACT_DIR / (rh_path.stem + "_transposed.mid"))
+        )
+
+        tasks[task_id]["step"] = "Processing notes for beginner..."
+        df = await asyncio.to_thread(mid_to_pd, str(transposed_path))
+        processed_df = df.groupby('grouped_time').apply(
+            lambda x: x.loc[x['pitch'].idxmax()]
+        ).reset_index(drop=True)
+        processed_str = pd_to_str(processed_df)
+        processed_path = ARTIFACT_DIR / (rh_path.stem + "_processed.mid")
+        await asyncio.to_thread(str_to_mid, processed_str, str(processed_path))
+
+        tasks[task_id] = {
+            "status": "done",
+            "file":   processed_path.name,
+            "key":    f"{tonic} {mode}",
+            "notes":  int(len(processed_df)),
+            "median_duration": round(float(processed_df['duration'].median()), 3),
+        }
+    except Exception as exc:
+        tasks[task_id] = {"status": "error", "error": str(exc)}
+
+
 @app.post("/upload")
 async def upload_audio(file: UploadFile = File(...)):
     task_id = str(uuid.uuid4())[:8]
     tasks[task_id] = {"status": "processing", "step": "Uploading..."}
-
     content = await file.read()
     input_path = UPLOADS_DIR / file.filename
     input_path.write_bytes(content)
-
-    async def pipeline():
-        try:
-            tasks[task_id]["step"] = "Converting audio to MIDI (ffmpeg + transkun)..."
-            midi_path = await asyncio.to_thread(convert_audio_to_midi, str(input_path))
-
-            tasks[task_id]["step"] = "Splitting hands..."
-            rh_path = await asyncio.to_thread(extract_right_hand, str(midi_path))
-
-            tasks[task_id]["step"] = "Analysing notes..."
-            tonic, mode = await asyncio.to_thread(chord_detector, str(rh_path))
-            df = await asyncio.to_thread(mid_to_pd, str(rh_path))
-
-            tasks[task_id] = {
-                "status": "done",
-                "file":   rh_path.name,
-                "key":    f"{tonic} {mode}",
-                "notes":  int(len(df)),
-                "median_duration": round(float(df['duration'].median()), 3),
-            }
-        except Exception as exc:
-            tasks[task_id] = {"status": "error", "error": str(exc)}
-
-    asyncio.create_task(pipeline())
+    asyncio.create_task(_run_pipeline(input_path, task_id))
     return JSONResponse({"task_id": task_id})
 
 
 @app.get("/status/{task_id}")
 async def task_status(task_id: str):
     return JSONResponse(tasks.get(task_id, {"status": "unknown"}))
+
+
+@app.get("/api/search")
+async def search_youtube(q: str):
+    try:
+        results = await asyncio.to_thread(_yt_search, q)
+        return JSONResponse({"results": results})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/api/preview/{video_id}")
+async def preview_audio(video_id: str):
+    if not re.match(r'^[A-Za-z0-9_-]{11}$', video_id):
+        return JSONResponse({"error": "Invalid video ID"}, status_code=400)
+    cache_path = UPLOADS_DIR / f"preview_{video_id}.mp3"
+    if not cache_path.exists():
+        try:
+            await asyncio.to_thread(_download_preview, video_id, str(cache_path))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+    return FileResponse(str(cache_path), media_type="audio/mpeg")
+
+
+@app.post("/api/download")
+async def download_youtube(req: DownloadRequest):
+    task_id = str(uuid.uuid4())[:8]
+    tasks[task_id] = {"status": "processing", "step": "Downloading from YouTube..."}
+
+    async def pipeline():
+        try:
+            safe_title = re.sub(r'[^\w\s-]', '', req.title)[:40].strip() or task_id
+            audio_path = UPLOADS_DIR / f"{safe_title}_{task_id}.mp3"
+            tasks[task_id]["step"] = "Downloading audio from YouTube..."
+            await asyncio.to_thread(_download_audio, req.url, str(audio_path))
+        except Exception as exc:
+            tasks[task_id] = {"status": "error", "error": str(exc)}
+            return
+        await _run_pipeline(audio_path, task_id)
+
+    asyncio.create_task(pipeline())
+    return JSONResponse({"task_id": task_id})
 
 
 # ─── WebSocket ────────────────────────────────────────────────────────────────

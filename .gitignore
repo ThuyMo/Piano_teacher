@@ -16,3 +16,7 @@ uploads/
 
 # OS
 .DS_Store
+.greennode.json
+.env
+.agentbase/
+.claude/

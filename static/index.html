@@ -16,12 +16,35 @@
       font-family: Arial, sans-serif;
     }
     canvas { display: block; border-radius: 8px; }
-    #conn  { color: #555; font-size: 13px; margin-top: 10px; }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    #conn  { color: #555; font-size: 13px; }
+    #soundToggle {
+      background: #1e3a60;
+      color: #77b7ff;
+      border: 1px solid #2a4a80;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #soundToggle.on {
+      background: #235c38;
+      border-color: #358d54;
+      color: #8dffae;
+    }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
-  <div id="conn">Connecting to server…</div>
+  <div class="status-row">
+    <button id="soundToggle" type="button">Sound off</button>
+    <div id="conn">Connecting to server...</div>
+  </div>
 
 <script>
 // ─── Constants (mirror server values) ────────────────────────────────────────
@@ -79,6 +102,71 @@ function liveGameTime() {
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 const connDiv = document.getElementById('conn');
+const soundToggle = document.getElementById('soundToggle');
+let ws = null;
+let midiStatus = 'MIDI: not connected';
+
+// ─── Browser audio ───────────────────────────────────────────────────────────
+let audioCtx = null;
+let masterGain = null;
+let soundEnabled = false;
+const soundingNotes = new Map();
+
+function midiToHz(pitch) {
+  return 440 * Math.pow(2, (pitch - 69) / 12);
+}
+
+function ensureAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.18;
+    masterGain.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function setSoundEnabled(enabled) {
+  soundEnabled = enabled;
+  if (soundEnabled) ensureAudio();
+  soundToggle.textContent = soundEnabled ? 'Sound on' : 'Sound off';
+  soundToggle.classList.toggle('on', soundEnabled);
+}
+
+function playNote(pitch, velocity = 90) {
+  if (!soundEnabled) return;
+  ensureAudio();
+  stopNote(pitch);
+
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const level = Math.max(0.05, Math.min(1, velocity / 127)) * 0.5;
+
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(midiToHz(pitch), now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(level, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(level * 0.55, now + 0.16);
+
+  osc.connect(gain);
+  gain.connect(masterGain);
+  osc.start(now);
+  soundingNotes.set(pitch, { osc, gain });
+}
+
+function stopNote(pitch) {
+  const node = soundingNotes.get(pitch);
+  if (!node || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  node.gain.gain.cancelScheduledValues(now);
+  node.gain.gain.setValueAtTime(Math.max(node.gain.gain.value, 0.0001), now);
+  node.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+  node.osc.stop(now + 0.1);
+  soundingNotes.delete(pitch);
+}
+
+soundToggle.addEventListener('click', () => setSoundEnabled(!soundEnabled));
 
 async function init() {
   const res = await fetch('/notes');
@@ -87,9 +175,13 @@ async function init() {
   total    = data.total;
   connDiv.textContent = `${allNotes.length} notes loaded`;
 
-  const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen  = () => { connDiv.textContent = 'Connected'; };
-  ws.onclose = () => { connDiv.textContent = 'Disconnected — refresh to reconnect'; };
+  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${wsProtocol}://${location.host}/ws`);
+  ws.onopen  = () => {
+    connDiv.textContent = `Connected · ${midiStatus}`;
+    initWebMidi();
+  };
+  ws.onclose = () => { connDiv.textContent = 'Disconnected - refresh to reconnect'; };
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'state') {
@@ -103,6 +195,52 @@ async function init() {
       hitPitches  = msg.hit_pitches;
     }
   };
+}
+
+// ─── Browser MIDI input ──────────────────────────────────────────────────────
+
+function sendMidi(event, note, velocity) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'midi', event, note, velocity }));
+}
+
+async function initWebMidi() {
+  if (!navigator.requestMIDIAccess) {
+    midiStatus = 'MIDI: browser unsupported';
+    connDiv.textContent = `Connected · ${midiStatus}`;
+    return;
+  }
+
+  try {
+    const access = await navigator.requestMIDIAccess();
+    const attachInputs = () => {
+      const inputs = [...access.inputs.values()];
+      midiStatus = inputs.length
+        ? `MIDI: ${inputs.map(input => input.name || 'Keyboard').join(', ')}`
+        : 'MIDI: no device';
+      connDiv.textContent = `Connected · ${midiStatus}`;
+
+      for (const input of inputs) {
+        input.onmidimessage = ({ data }) => {
+          const [status, note, velocity = 0] = data;
+          const command = status & 0xf0;
+          if (command === 0x90 && velocity > 0) {
+            playNote(note, velocity);
+            sendMidi('note_on', note, velocity);
+          } else if (command === 0x80 || command === 0x90) {
+            stopNote(note);
+            sendMidi('note_off', note, 0);
+          }
+        };
+      }
+    };
+
+    attachInputs();
+    access.onstatechange = attachInputs;
+  } catch (err) {
+    midiStatus = `MIDI: permission denied`;
+    connDiv.textContent = `Connected · ${midiStatus}`;
+  }
 }
 
 // ─── Rendering ────────────────────────────────────────────────────────────────

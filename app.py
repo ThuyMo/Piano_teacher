@@ -5,6 +5,7 @@ Then open http://localhost:8000
 """
 import asyncio
 import json
+import os
 import queue
 import threading
 import uuid
@@ -107,6 +108,11 @@ async def dashboard():
     return FileResponse(BASE_DIR / "static" / "dashboard.html")
 
 
+@app.get("/health")
+async def health():
+    return JSONResponse({"status": "ok"})
+
+
 @app.get("/game")
 async def game_page():
     return FileResponse(BASE_DIR / "static" / "index.html")
@@ -186,7 +192,20 @@ async def ws_handler(websocket: WebSocket):
     clients.add(websocket)
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            if msg.get("type") == "midi":
+                event_type = msg.get("event")
+                note = int(msg.get("note"))
+                velocity = int(msg.get("velocity", 0))
+                if event_type == "note_on" and velocity > 0:
+                    midi_q.put(mido.Message("note_on", note=note, velocity=velocity))
+                elif event_type in {"note_off", "note_on"}:
+                    midi_q.put(mido.Message("note_off", note=note, velocity=0))
     except WebSocketDisconnect:
         pass
     finally:
@@ -262,7 +281,11 @@ async def game_loop():
 
 
 def _midi_listener():
-    ports = mido.get_input_names()
+    try:
+        ports = mido.get_input_names()
+    except Exception as exc:
+        print(f"MIDI input unavailable — keyboard input disabled: {exc}")
+        return
     if not ports:
         print("No MIDI device found — keyboard input disabled.")
         return
@@ -275,7 +298,8 @@ def _midi_listener():
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(game_loop())
-    threading.Thread(target=_midi_listener, daemon=True).start()
+    if os.getenv("ENABLE_MIDI_INPUT", "").lower() in {"1", "true", "yes", "on"}:
+        threading.Thread(target=_midi_listener, daemon=True).start()
 
 
 if __name__ == '__main__':

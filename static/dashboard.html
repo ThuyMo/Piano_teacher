@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Piano Teacher</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a12;
+      color: #ccccdd;
+      font-family: Arial, sans-serif;
+      min-height: 100vh;
+      padding: 48px 20px;
+    }
+    .container { max-width: 680px; margin: 0 auto; }
+
+    h1 { font-size: 26px; color: #ffffff; margin-bottom: 6px; }
+    .subtitle { color: #44445a; font-size: 14px; margin-bottom: 40px; }
+
+    /* ── Upload card ── */
+    .upload-card {
+      background: #12121a;
+      border: 2px dashed #252535;
+      border-radius: 12px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      margin-bottom: 20px;
+    }
+    .upload-card:hover, .upload-card.dragover { border-color: #5096ff; }
+    .upload-icon { font-size: 40px; margin-bottom: 14px; }
+    .upload-card h2 { font-size: 17px; color: #eeeeff; margin-bottom: 6px; }
+    .upload-card p  { font-size: 13px; color: #44445a; margin-bottom: 22px; }
+    #fileInput { display: none; }
+    .btn {
+      background: #5096ff;
+      color: #fff;
+      border: none;
+      padding: 10px 26px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #6aaaff; }
+
+    /* ── Status bar ── */
+    #status {
+      background: #12121a;
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 24px;
+      display: none;
+      align-items: center;
+      gap: 12px;
+    }
+    #status.show { display: flex; }
+    .spinner {
+      width: 16px; height: 16px; flex-shrink: 0;
+      border: 2px solid #252535;
+      border-top-color: #5096ff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #statusText { font-size: 13px; color: #8888aa; flex: 1; }
+    #statusText.ok  { color: #50f078; }
+    #statusText.err { color: #ff5555; }
+    #playNew {
+      background: #50f078;
+      color: #0a0a12;
+      border: none;
+      padding: 7px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: bold;
+      cursor: pointer;
+      display: none;
+    }
+    #playNew:hover { background: #70ff96; }
+
+    /* ── File list ── */
+    .section-label {
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: #33334a;
+      margin-bottom: 14px;
+    }
+    .file-list { display: flex; flex-direction: column; gap: 8px; }
+    .file-item {
+      background: #12121a;
+      border-radius: 8px;
+      padding: 13px 18px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .file-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #3270dc; flex-shrink: 0;
+    }
+    .file-name { flex: 1; font-size: 14px; color: #ddddee; }
+    .file-size { font-size: 12px; color: #33334a; margin-right: 6px; }
+    .btn-play {
+      background: #1e3a60;
+      color: #5096ff;
+      border: 1px solid #2a4a80;
+      padding: 6px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-play:hover { background: #5096ff; color: #fff; }
+    .empty {
+      text-align: center;
+      color: #252535;
+      padding: 36px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>🎹 Piano Teacher</h1>
+  <p class="subtitle">Upload an audio recording to generate a playable piano game</p>
+
+  <!-- Upload -->
+  <div class="upload-card" id="dropZone">
+    <div class="upload-icon">🎵</div>
+    <h2>Drop an audio file here</h2>
+    <p>MP3, WAV, FLAC, M4A — right-hand part is extracted automatically</p>
+    <input type="file" id="fileInput" accept="audio/*" />
+    <button class="btn" onclick="document.getElementById('fileInput').click()">Browse File</button>
+  </div>
+
+  <!-- Status -->
+  <div id="status">
+    <div class="spinner" id="spinner"></div>
+    <span id="statusText">Processing…</span>
+    <button id="playNew"></button>
+  </div>
+
+  <!-- File list -->
+  <div class="section-label">Processed Files</div>
+  <div class="file-list" id="fileList">
+    <div class="empty">No files yet. Upload an audio file to begin.</div>
+  </div>
+</div>
+
+<script>
+const dropZone   = document.getElementById('dropZone');
+const fileInput  = document.getElementById('fileInput');
+const statusEl   = document.getElementById('status');
+const statusText = document.getElementById('statusText');
+const spinner    = document.getElementById('spinner');
+const playNew    = document.getElementById('playNew');
+const fileList   = document.getElementById('fileList');
+
+// ─── File list ────────────────────────────────────────────────────────────────
+
+async function loadFiles() {
+  const { files } = await fetch('/api/files').then(r => r.json());
+  if (!files.length) {
+    fileList.innerHTML = '<div class="empty">No files yet. Upload an audio file to begin.</div>';
+    return;
+  }
+  fileList.innerHTML = files.map(f => `
+    <div class="file-item">
+      <div class="file-dot"></div>
+      <span class="file-name">${f.name}</span>
+      <span class="file-size">${(f.size / 1024).toFixed(1)} KB</span>
+      <button class="btn-play" onclick="playFile('${f.name}')">▶ Play</button>
+    </div>
+  `).join('');
+}
+
+async function playFile(name) {
+  await fetch('/load', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: name }),
+  });
+  window.location.href = '/game';
+}
+
+// ─── Upload pipeline ──────────────────────────────────────────────────────────
+
+function showStatus(text, type = 'loading', file = null) {
+  statusEl.classList.add('show');
+  statusText.textContent = text;
+  statusText.className = type === 'ok' ? 'ok' : type === 'err' ? 'err' : '';
+  spinner.style.display = type === 'loading' ? 'block' : 'none';
+  if (file) {
+    playNew.textContent = '▶ Play now';
+    playNew.style.display = 'block';
+    playNew.onclick = () => playFile(file);
+  } else {
+    playNew.style.display = 'none';
+  }
+}
+
+async function processFile(file) {
+  showStatus(`Uploading ${file.name}…`);
+
+  const form = new FormData();
+  form.append('file', file);
+  const { task_id } = await fetch('/upload', { method: 'POST', body: form }).then(r => r.json());
+
+  while (true) {
+    await new Promise(r => setTimeout(r, 2500));
+    const s = await fetch(`/status/${task_id}`).then(r => r.json());
+
+    if (s.step && s.status === 'processing') {
+      showStatus(s.step);
+    }
+    if (s.status === 'done') {
+      showStatus(
+        `✓ ${s.file}  ·  Key: ${s.key}  ·  ${s.notes} notes  ·  avg. ${s.median_duration}s/note`,
+        'ok', s.file
+      );
+      loadFiles();
+      break;
+    }
+    if (s.status === 'error') {
+      showStatus(`Error: ${s.error}`, 'err');
+      break;
+    }
+  }
+}
+
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) processFile(e.target.files[0]);
+});
+dropZone.addEventListener('dragover', e => {
+  e.preventDefault(); dropZone.classList.add('dragover');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]);
+});
+
+loadFiles();
+</script>
+</body>
+</html>

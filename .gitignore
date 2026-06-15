@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Generated artifacts & uploads (large binary files)
+artifact/
+uploads/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store

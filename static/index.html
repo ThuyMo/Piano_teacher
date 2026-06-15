@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Piano Game</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a12;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      padding: 20px 0;
+      font-family: Arial, sans-serif;
+    }
+    canvas { display: block; border-radius: 8px; }
+    #conn  { color: #555; font-size: 13px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="conn">Connecting to server…</div>
+
+<script>
+// ─── Constants (mirror server values) ────────────────────────────────────────
+const START_MIDI  = 36, END_MIDI = 95;
+const IS_BLACK    = new Set([1, 3, 6, 8, 10]);
+const NOTE_NAMES  = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const WW = 36, WH = 140, BW = 22, BH = 88;
+const PAD_X    = 20;
+const HEADER_H = 55;
+const FALL_H   = 440;
+const LOOK_AHEAD  = 4.0;
+const FALL_SPEED  = FALL_H / LOOK_AHEAD;
+const PIANO_TOP   = HEADER_H + FALL_H;
+const HIT_LINE_Y  = PIANO_TOP;
+
+// ─── Build key positions ──────────────────────────────────────────────────────
+const keys = {};
+let whiteCount = 0;
+for (let p = START_MIDI; p <= END_MIDI; p++) {
+  if (!IS_BLACK.has(p % 12)) {
+    keys[p] = { x: whiteCount * WW, isBlack: false };
+    whiteCount++;
+  }
+}
+for (let p = START_MIDI; p <= END_MIDI; p++) {
+  if (IS_BLACK.has(p % 12) && keys[p - 1]) {
+    keys[p] = { x: keys[p - 1].x + WW - Math.floor(BW / 2), isBlack: true };
+  }
+}
+const WINDOW_W = whiteCount * WW + PAD_X * 2;
+const WINDOW_H = HEADER_H + FALL_H + WH + 20;
+
+// ─── Canvas setup (HiDPI) ─────────────────────────────────────────────────────
+const canvas = document.getElementById('game');
+const dpr    = window.devicePixelRatio || 1;
+canvas.width  = WINDOW_W * dpr;
+canvas.height = WINDOW_H * dpr;
+canvas.style.width  = WINDOW_W + 'px';
+canvas.style.height = WINDOW_H + 'px';
+const ctx = canvas.getContext('2d');
+ctx.scale(dpr, dpr);
+
+// ─── Game state ───────────────────────────────────────────────────────────────
+let allNotes    = [];
+let serverTime  = 0;
+let serverStamp = 0;
+let gameStatus  = 'LOADING';
+let score = 0, total = 0;
+let activeNotes = [], waitPitches = [], hitPitches = [];
+
+function liveGameTime() {
+  if (gameStatus !== 'PLAYING') return serverTime;
+  return serverTime + (performance.now() - serverStamp) / 1000;
+}
+
+// ─── WebSocket ────────────────────────────────────────────────────────────────
+const connDiv = document.getElementById('conn');
+
+async function init() {
+  const res = await fetch('/notes');
+  const data = await res.json();
+  allNotes = data.notes;
+  total    = data.total;
+  connDiv.textContent = `${allNotes.length} notes loaded`;
+
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen  = () => { connDiv.textContent = 'Connected'; };
+  ws.onclose = () => { connDiv.textContent = 'Disconnected — refresh to reconnect'; };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'state') {
+      serverTime  = msg.game_time;
+      serverStamp = performance.now();
+      gameStatus  = msg.status;
+      score       = msg.score;
+      total       = msg.total;
+      activeNotes = msg.active_notes;
+      waitPitches = msg.wait_pitches;
+      hitPitches  = msg.hit_pitches;
+    }
+  };
+}
+
+// ─── Rendering ────────────────────────────────────────────────────────────────
+
+function pitchName(p) {
+  return NOTE_NAMES[p % 12] + (Math.floor(p / 12) - 1);
+}
+
+function render() {
+  const gt = liveGameTime();
+  ctx.fillStyle = '#12121a';
+  ctx.fillRect(0, 0, WINDOW_W, WINDOW_H);
+
+  // Lane guides
+  for (let p = START_MIDI; p <= END_MIDI; p++) {
+    const k = keys[p];
+    if (!k || k.isBlack) continue;
+    ctx.fillStyle = 'rgba(255,255,255,0.02)';
+    ctx.fillRect(k.x + PAD_X, HEADER_H, WW - 1, FALL_H);
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.fillRect(k.x + PAD_X, HEADER_H, 1, FALL_H);
+  }
+
+  // ── Falling notes ──────────────────────────────────────────────────────────
+  const visEnd = gt + LOOK_AHEAD + 0.5;
+  for (const note of allNotes) {
+    if (note.start > visEnd) break;
+    if (note.end < gt - 0.2)  continue;
+    const k = keys[note.pitch];
+    if (!k) continue;
+
+    const x = k.x + PAD_X;
+    const w = k.isBlack ? BW : WW - 1;
+    const h = Math.max(8, (note.end - note.start) * FALL_SPEED);
+    const bot = HEADER_H + FALL_H - (note.start - gt) * FALL_SPEED;
+    const top = bot - h;
+
+    const drawTop = Math.max(top, HEADER_H);
+    const drawBot = Math.min(bot, HEADER_H + FALL_H);
+    const drawH   = drawBot - drawTop;
+    if (drawH <= 0) continue;
+
+    const isWait = waitPitches.includes(note.pitch);
+    const isHit  = hitPitches.includes(note.pitch);
+    if (isHit)       ctx.fillStyle = '#50f078';
+    else if (isWait) ctx.fillStyle = '#ffc832';
+    else             ctx.fillStyle = k.isBlack ? '#3270dc' : '#5096ff';
+
+    ctx.fillRect(x, drawTop, w, drawH);
+    ctx.strokeStyle = '#12121a';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, drawTop + 0.5, w - 1, drawH - 1);
+  }
+
+  // Hit line
+  ctx.fillStyle = '#ffc832';
+  ctx.fillRect(PAD_X, HIT_LINE_Y - 2, whiteCount * WW, 3);
+
+  // ── Piano ──────────────────────────────────────────────────────────────────
+  // White keys
+  for (let p = START_MIDI; p <= END_MIDI; p++) {
+    const k = keys[p];
+    if (!k || k.isBlack) continue;
+    const x = k.x + PAD_X;
+    const needsPress = waitPitches.includes(p) && !hitPitches.includes(p);
+
+    if (activeNotes.includes(p))  ctx.fillStyle = '#64b4ff';
+    else if (needsPress)          ctx.fillStyle = '#ffc832';
+    else                          ctx.fillStyle = '#ffffff';
+
+    ctx.fillRect(x, PIANO_TOP, WW - 1, WH);
+    ctx.strokeStyle = '#505060';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, PIANO_TOP + 0.5, WW - 2, WH - 1);
+
+    if (p % 12 === 0) {
+      ctx.fillStyle = '#888';
+      ctx.font = '11px Arial';
+      ctx.fillText(`C${Math.floor(p/12)-1}`, x + 3, PIANO_TOP + WH - 5);
+    }
+  }
+  // Black keys
+  for (let p = START_MIDI; p <= END_MIDI; p++) {
+    const k = keys[p];
+    if (!k || !k.isBlack) continue;
+    const x = k.x + PAD_X;
+    const needsPress = waitPitches.includes(p) && !hitPitches.includes(p);
+
+    if (activeNotes.includes(p))  ctx.fillStyle = '#3278c8';
+    else if (needsPress)          ctx.fillStyle = '#b08800';
+    else                          ctx.fillStyle = '#0f0f0f';
+
+    ctx.fillRect(x, PIANO_TOP, BW, BH);
+  }
+
+  // ── Header ─────────────────────────────────────────────────────────────────
+  if (gameStatus === 'FINISHED') {
+    ctx.fillStyle = '#50f078';
+    ctx.font = 'bold 28px Arial';
+    ctx.fillText(`Complete!   Score: ${score} / ${total}`, PAD_X, 36);
+
+  } else if (gameStatus === 'WAITING') {
+    const needed = waitPitches
+      .filter(p => !hitPitches.includes(p))
+      .map(pitchName).join('  +  ');
+    const done = hitPitches.map(pitchName).join('  ');
+    ctx.fillStyle = '#ffc832';
+    ctx.font = 'bold 20px Arial';
+    ctx.fillText(`Play: ${needed}`, PAD_X, 28);
+    if (done) {
+      ctx.fillStyle = '#50f078';
+      ctx.font = '14px Arial';
+      ctx.fillText(`✓ ${done}`, PAD_X, 48);
+    }
+
+  } else {
+    ctx.fillStyle = '#aaaacc';
+    ctx.font = '16px Arial';
+    ctx.fillText(`Score: ${score} / ${total}`, PAD_X, 32);
+  }
+
+  requestAnimationFrame(render);
+}
+
+init().then(() => requestAnimationFrame(render));
+</script>
+</body>
+</html>

@@ -945,17 +945,18 @@ async def preview_audio(video_id: str):
 @app.post("/api/download")
 async def download_youtube(req: DownloadRequest):
     task_id = str(uuid.uuid4())[:8]
-    tasks[task_id] = {"status": "processing", "step": "Downloading from YouTube..."}
+    tasks[task_id] = {"status": "processing", "step": "Searching for audio..."}
 
     async def pipeline():
         try:
             safe_title = re.sub(r'[^\w\s-]', '', req.title)[:40].strip() or task_id
             audio_path = UPLOADS_DIR / f"{safe_title}_{task_id}.mp3"
-            tasks[task_id]["step"] = "Downloading audio from YouTube..."
+            # Try YouTube with robust mobile-client downloader (cookies + retry)
+            tasks[task_id]["step"] = "Downloading from YouTube..."
             try:
-                await asyncio.to_thread(_download_audio, req.url, str(audio_path))
+                await asyncio.to_thread(_ytdlp_download, req.title, audio_path)
             except Exception:
-                # YouTube blocked on cloud IP — auto-fallback to SoundCloud
+                # YouTube blocked on datacenter IP — fallback to SoundCloud
                 tasks[task_id]["step"] = "YouTube unavailable, trying SoundCloud..."
                 await asyncio.to_thread(_soundcloud_download, req.title, audio_path)
         except Exception as exc:

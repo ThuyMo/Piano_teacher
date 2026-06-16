@@ -1,248 +1,325 @@
-# GreenNode AgentBase Skills
+# Piano Teacher
 
-A bundle of [SKILL.md](https://www.mintlify.com/blog/skill-md)-compatible skills that drive the full **GreenNode AgentBase** lifecycle — scaffold → configure → code → test → deploy → monitor → teardown — from inside your AI coding tool.
-
-Drop them into **Claude Code**, **Cursor**, **OpenAI Codex**, or any other SKILL.md-aware client and you get slash commands like `/agentbase-wizard`, `/agentbase-deploy`, `/agentbase-monitor`. The skills are plain Markdown + shell — no client-specific runtime — so the **full lifecycle works in every tool that can read SKILL.md and run a shell**.
+> Biến bất kỳ bài nhạc nào thành trò chơi piano tương tác — tìm kiếm bài hát, tải audio, chuyển đổi tự động sang MIDI, rồi luyện tập với nốt nhạc rơi và phản hồi từ AI coach.
 
 ---
 
-## TL;DR — Install in 30 Seconds
+## Demo
+
+[![Watch the demo](https://img.shields.io/badge/▶%20Watch%20Demo-blue?style=for-the-badge)](https://github.com/ThuyMo/Piano_teacher)
+
+---
+
+## Problem
+
+Người mới học đàn piano thường gặp hai rào cản lớn:
+
+1. **Không có bản nhạc phù hợp.** Sheet nhạc truyền thống quá phức tạp với người mới, trong khi các app học piano chỉ có thư viện nhạc cố định — không thể học bài mình thích.
+2. **Không có ai chỉnh sửa lỗi trong lúc luyện tập.** Người học tự luyện sẽ lặp đi lặp lại sai lầm mà không biết, không có ai gợi ý khi nào nên chậm lại hay chuyển sang tay nào.
+
+Kết quả: người học bỏ cuộc sớm vì chán hoặc vì không có tiến bộ rõ rệt.
+
+---
+
+## Users
+
+| Ai | Dùng như thế nào |
+|----|-----------------|
+| **Người mới học piano** | Tìm bài nhạc yêu thích từ YouTube/SoundCloud, luyện tập tay phải hoặc tay trái riêng với nốt nhạc rơi trực quan |
+| **Giáo viên âm nhạc** | Tạo bài luyện tập cho học sinh từ bất kỳ bản audio nào, điều chỉnh tốc độ và chọn phần bài phù hợp trình độ |
+| **Người học trung cấp** | Luyện cả hai tay đồng thời, nhận phản hồi AI về tempo và điểm yếu cụ thể |
+
+---
+
+## Solution
+
+App xử lý toàn bộ pipeline từ audio thô đến trò chơi piano tương tác qua ba giai đoạn:
+
+### 1. Tìm kiếm và tải nhạc
+
+Người dùng tìm kiếm bài hát theo tên hoặc upload file audio trực tiếp. Hệ thống hỗ trợ hai nguồn:
+
+- **YouTube** — tìm kiếm top 5 kết quả, preview 30 giây trước khi tải
+- **SoundCloud** — thay thế không bị chặn trên datacenter IP; tự động fallback nếu YouTube thất bại
+
+File audio (MP3/WAV/FLAC/M4A) được đưa qua pipeline xử lý tự động:
+
+1. **Audio → MIDI** — `ffmpeg` chuẩn hoá audio, `transkun` (AI model) nhận diện nốt nhạc
+2. **Tách tay** — thuật toán distance-based chia notes thành tay phải (`_RH.mid`) và tay trái (`_LH.mid`)
+3. **Chuyển tông** — tự động detect key, transpose về C major / A minor cho người mới dễ chơi
+4. **Đơn giản hoá** — chỉ giữ nốt cao nhất mỗi time group, phù hợp trình độ beginner
+
+### 2. Chơi game — nốt nhạc rơi tương tác
+
+Game hiển thị đàn piano 88 phím với nốt nhạc rơi từ trên xuống:
+
+- **Xanh lam** — nốt đang rơi chưa cần nhấn
+- **Vàng** — nốt cần nhấn ngay (game đang chờ)
+- **Xanh lá** — nhấn đúng
+- **Cam đỏ** — nhấn sai
+
+Chế độ **Wait Mode**: game tạm dừng và chờ người chơi nhấn đúng nốt trước khi tiếp tục — không bỏ lỡ nốt nào. Hỗ trợ đổi tay (RH/LH/Cả hai) ngay trong lúc chơi mà không cần tải lại bài.
+
+### 3. AI Coach — phản hồi thời gian thực
+
+Sau mỗi section, **gemma-4-31b-it** phân tích kết quả chơi và đưa ra phản hồi:
+
+- Gợi ý giảm tốc độ khi tỉ lệ lỗi cao
+- Nhận xét các nốt hay bị sai nhất
+- Khuyến khích khi người học tiến bộ
+
+### Architecture
+
+```
+Browser (static/)
+  │  ← dashboard tìm kiếm nhạc, game piano canvas, UI điều khiển
+  │
+  ├── HTTP (port 8080) ──→ FastAPI (app.py)
+  │                            ├── GET  /                → dashboard.html
+  │                            ├── POST /api/download    → tải YouTube/SoundCloud + pipeline
+  │                            ├── GET  /api/search      → tìm YouTube (yt-dlp)
+  │                            ├── GET  /api/search-soundcloud → tìm SoundCloud
+  │                            ├── POST /load            → load bài vào game
+  │                            ├── POST /set-hand        → đổi tay RH/LH/BOTH
+  │                            ├── POST /set-tempo       → điều chỉnh tốc độ
+  │                            └── GET  /status/{id}     → poll tiến trình xử lý
+  │
+  └── WebSocket /ws ──→ Game loop (30fps)
+                            ├── Nhận MIDI input từ browser (Web MIDI API)
+                            ├── Tính toán hit/miss/wait state
+                            ├── Broadcast piano state cho canvas render
+                            └── Gọi gemma-4-31b-it khi kết thúc section
+```
+
+**Audio processing pipeline:**
+
+```
+MP3/WAV/FLAC  →  ffmpeg  →  WAV  →  transkun  →  MIDI
+     →  split_midi_hands  →  _RH.mid + _LH.mid
+     →  chord_detector    →  transpose sang C/Am
+     →  mid_to_pd         →  đơn giản hoá beginner
+     →  _RH_processed.mid (file dùng trong game)
+```
+
+---
+
+## How to Run
+
+### Prerequisites
+
+- Python 3.11+
+- `ffmpeg` (cài qua `brew install ffmpeg` hoặc `apt-get install ffmpeg`)
+- GreenNode MaaS API key (hoặc bất kỳ OpenAI-compatible endpoint nào)
+
+### 1. Clone và cài đặt
 
 ```bash
-git clone https://github.com/vngcloud/greennode-agentbase-skills.git
-
-# Pick the install target for your tool (see table below)
-#   Claude Code  → ~/.claude/skills        or  <project>/.claude/skills
-#   Cursor       → ~/.cursor/skills        or  <project>/.cursor/skills
-#   Codex        → ~/.agents/skills        or  <project>/.agents/skills
-
-mkdir -p ~/.claude/skills
-cp -r greennode-agentbase-skills/.claude/skills/* ~/.claude/skills/
+git clone https://github.com/ThuyMo/Piano_teacher.git
+cd Piano_teacher
+pip install -r requirements.txt
 ```
 
-Then restart your tool and type `/agentbase-wizard` (or just say *"build me a Telegram bot"*).
-
----
-
-## Install Per Tool
-
-All skills live under `.claude/skills/`. They are plain folders with a `SKILL.md` file inside — no build step. Each client auto-discovers them from a known directory.
-
-### 1. Claude Code
-
-The native home for these skills.
+### 2. Cấu hình môi trường
 
 ```bash
-# Global (recommended — available in every project)
-mkdir -p ~/.claude/skills
-cp -r greennode-agentbase-skills/.claude/skills/* ~/.claude/skills/
-
-# OR project-scoped
-mkdir -p <your-project>/.claude/skills
-cp -r greennode-agentbase-skills/.claude/skills/* <your-project>/.claude/skills/
+cp .env.example .env
 ```
 
-Launch and use:
+Chỉnh sửa `.env`:
+
+```env
+# GreenNode MaaS (hoặc bất kỳ OpenAI-compatible LLM nào)
+LLM_API_KEY=your-api-key-here
+LLM_BASE_URL=https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1
+LLM_MODEL=google/gemma-4-31b-it
+
+# YouTube cookies (tuỳ chọn — cần nếu muốn tải từ YouTube trên cloud)
+# YTDLP_COOKIES_B64=<base64 của Netscape cookie file chỉ chứa .youtube.com>
+```
+
+### 3. Khởi động server
 
 ```bash
-cd <your-project> && claude
-> /agentbase-wizard          # slash command
-> "deploy my agent"           # or just describe intent — Claude picks the skill
+uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-> **Tip:** `claude` will auto-load every `SKILL.md` it finds. To verify, run `/help` and look for the skills section.
+### 4. Mở UI
 
-### 2. Cursor
+Truy cập `http://localhost:8080` trên trình duyệt.
 
-Cursor's skills support and exact path have evolved across releases — **check your version's docs** for the correct skills directory before installing. Typical layout:
+**Quy trình sử dụng:**
+
+1. Tìm kiếm bài hát trên **YouTube** hoặc **SoundCloud** (hoặc upload file audio trực tiếp)
+2. Click **"Use this"** — hệ thống tải về và xử lý tự động (~30-60s)
+3. Bài xuất hiện trong danh sách "Processed Files" → click **▶ Play**
+4. Chọn tay (Tay phải / Tay trái / Cả hai), tốc độ, và phần bài muốn luyện
+5. Luyện tập — game chờ bạn nhấn đúng nốt trước khi tiếp tục
+6. Xem phản hồi AI sau mỗi section
+
+### Optional: Docker
 
 ```bash
-mkdir -p ~/.cursor/skills
-cp -r greennode-agentbase-skills/.claude/skills/* ~/.cursor/skills/
-# or project-scoped: <your-project>/.cursor/skills/
+docker build --platform linux/amd64 -t piano-teacher .
+docker run -p 8080:8080 --env-file .env piano-teacher
 ```
 
-Open Cursor → Agent chat → type `/` to search skills. Agent mode runs bash / curl, so deploy / monitor / teardown work end-to-end.
+---
 
-### 3. OpenAI Codex
+## Deploy to AgentBase
+
+Chạy local là bước đầu. Để app hoạt động **production** với endpoint ổn định, không lo YouTube bị block, và AI coach luôn sẵn sàng — deploy lên **GreenNode AgentBase**.
+
+### Dùng AgentBase Skills
+
+[**greennode-agentbase-skills**](https://github.com/vngcloud/greennode-agentbase-skills) là bộ skill dành riêng cho Claude Code, hỗ trợ toàn bộ lifecycle: scaffold → config → deploy → monitor → teardown.
+
+**Thêm skill vào project:**
 
 ```bash
-export OPENAI_API_KEY="..."
-cd <your-project> && codex
+echo "https://github.com/vngcloud/greennode-agentbase-skills" >> .claude/SKILLS.md
 ```
 
-Codex CLI reads SKILL.md-style files; **the exact discovery path depends on your Codex version** (commonly `~/.agents/skills/` or `<project>/.agents/skills/` — check your version's docs). Once discovered, the CLI executes shell + HTTP calls, so the full lifecycle works.
+**Các lệnh chính:**
 
-### 4. Other SKILL.md-compatible Clients
-
-Any client that (a) reads SKILL.md frontmatter (`name`, `description`) and (b) can run shell commands will work. Point the client at the `.claude/skills/` directory or copy folders into whatever skills path it expects.
-
-### Compatibility Matrix
-
-The skills are **tool-agnostic** — they're just Markdown procedures plus `bash` / `curl` calls to the GreenNode REST APIs. Every SKILL.md-aware client with shell access can run them end-to-end. Differences below are about **UX**, not capability.
-
-| | Claude Code | Cursor | Codex | Other SKILL.md clients |
-|---|:-:|:-:|:-:|:-:|
-| Typical skills directory | `.claude/skills/` | `.cursor/skills/` | `.agents/skills/` | client-specific |
-| Invocation | `/skill-name` | `/skill-name` (Agent) | natural language / CLI | varies |
-| Auto-routing by description | ✅ native | ✅ | ✅ | depends on client |
-| Runs shell / HTTP from skills | ✅ | ✅ (Agent mode) | ✅ | requires shell tool |
-| Full deploy & monitor pipeline | ✅ | ✅ | ✅ | ✅ if shell available |
-
-> The skills are authored and tuned primarily on Claude Code — that's where routing and prompts are validated. Functionally though, every tool with shell access can run them; Cursor / Codex / other clients just don't have a dedicated test pass yet.
+```
+/agentbase-wizard init     # Scaffold cấu hình AgentBase cho project
+/agentbase-identity        # Cấu hình tên, system prompt, personality của agent
+/agentbase-deploy          # Build Docker image, push lên GreenNode Container Registry, tạo runtime
+/agentbase-monitor         # Xem logs, CPU/Memory, distributed traces
+```
 
 ---
 
-## Prerequisites
+### Lợi ích khi chạy trên AgentBase
 
-Before any skill that hits the platform, set GreenNode IAM credentials:
+#### Endpoint ổn định — URL không đổi khi update version
 
-```bash
-export GREENNODE_CLIENT_ID="<service-account-client-id>"
-export GREENNODE_CLIENT_SECRET="<service-account-secret>"
-```
-
-Put them in your shell profile or in a project-local `.env` (never commit it — `.env.example` is the tracked template).
-
-Skills that only read local files (e.g. `agentbase-wizard init`) work without credentials.
+Mỗi agent có một **DEFAULT endpoint** với URL cố định. Deploy version mới — URL vẫn giữ nguyên, không cần cập nhật config ở phía người dùng.
 
 ---
 
-## Skills Index
+#### Version control tự động — rollback bất kỳ lúc nào
 
-| Skill | What it does |
-|---|---|
-| `/agentbase-wizard` | **Start here.** Guided 9-step lifecycle: scaffold → configure → code → test → deploy → verify. Also handles `init`, `test`, `resume`. |
-| `/agentbase` | Platform reference — architecture, services, IAM, "which skill should I use". |
-| `/agentbase-identity` | Register agent identities; store API keys / OAuth2 credentials for external services (OpenAI, Google, Slack, …). |
-| `/agentbase-llm` | Manage **platform** LLM access — API keys, model catalog, rate limits, OpenAI-compatible endpoint. |
-| `/agentbase-memory` | Conversation history, semantic memory, long-term memory stores (LangChain/LangGraph integration). |
-| `/agentbase-deploy` | Build & push Docker image, create/update Custom Agent runtimes (PUBLIC/VPC), deploy OpenClaw Telegram/Zalo bots, manage the Container Registry. |
-| `/agentbase-monitor` | Runtime logs, endpoint logs, CPU/RAM metrics, unified resource dashboard. |
-| `/agentbase-gateway` | Resource Gateway (MCP) CRUD; inbound auth (NONE / IAM / JWT); per-target outbound auth (APIKEY / OAUTH 2LO / 3LO); VPC routes; Policy Group binding. |
-| `/agentbase-policy` | Authorization policies — Policy Groups, Policies, and `statement` bodies (effect / principal / actions / resources / condition). Enforced today on the Resource Gateway. |
-| `/agentbase-teardown` | Delete **all** resources for a project. Always supports `--dry-run`. |
-
-### Lifecycle Map
-
-```
-┌────────────────────────────────────────────────────────┐
-│ GET STARTED                                            │
-│   /agentbase-wizard ────── guided A → Z                │
-│   /agentbase ───────────── platform reference          │
-├────────────────────────────────────────────────────────┤
-│ BUILD & CONFIGURE                                      │
-│   /agentbase-wizard init ── scaffold project           │
-│   /agentbase-llm ────────── platform LLM access        │
-│   /agentbase-identity ───── identities & external auth │
-│   /agentbase-memory ─────── memory stores              │
-├────────────────────────────────────────────────────────┤
-│ TEST & DEPLOY                                          │
-│   /agentbase-wizard test ── validate / local / docker  │
-│   /agentbase-deploy ─────── build, push, deploy        │
-├────────────────────────────────────────────────────────┤
-│ OPERATE                                                │
-│   /agentbase-monitor ────── logs, metrics, dashboard   │
-│   /agentbase-gateway ────── Resource Gateway (MCP)     │
-│   /agentbase-policy ─────── access policies            │
-├────────────────────────────────────────────────────────┤
-│ ADVANCED                                               │
-│   /agentbase-deploy cr ──── Container Registry         │
-│   /agentbase-teardown ───── delete everything          │
-└────────────────────────────────────────────────────────┘
-```
-
-### Common Subcommands
-
-```text
-/agentbase-wizard   [init <name> [--langchain|--langgraph] | test [validate|local|docker|preflight] | resume | step-N | reset]
-/agentbase-identity identity <create|list|get|update|delete>          [name]
-                    auth     <apikey|delegated|oauth2> <create|list|get|update|delete|retrieve> [name]
-/agentbase-llm      <api-keys|models> <create|list|get|update|delete|enable|disable|rate-limit> [name-or-uuid]
-/agentbase-memory   memory  <create|list|get|delete> [id]
-                    events  <list|create|delete>
-                    records <browse|search|generate-from-session|generate-from-content|insert|delete>
-/agentbase-deploy   Custom Agent: build → push → deploy, runtime CRUD, scale, versions
-                    OpenClaw:     create|list|start|stop|switch-version (Telegram/Zalo templates)
-                    Container Registry: repo info, credentials, images, artifacts
-/agentbase-monitor  <runtime-logs|endpoint-logs|metrics|dashboard> [runtime-id] [endpoint-id]
-/agentbase-gateway  <create|list|get|update|delete|routes|repair|flavors> [gateway-name]
-/agentbase-policy   <group|policy> <create|list|get|update|delete> [group-id-or-name] [policy-id-or-name]
-/agentbase-teardown <project-name> [--dry-run]
-```
-
-> These skills are driven by natural language — the syntax above is a quick reference, not a strict CLI. Tell the model what you want and it picks the right operation.
+Mỗi lần deploy tạo ra một **snapshot version** tự động. Xem lịch sử, so sánh, hoặc rollback về version cũ chỉ bằng vài click.
 
 ---
 
-## End-to-End Example — Build a Chatbot
+#### Monitoring tích hợp — CPU, Memory, Logs, Tracing
 
-```bash
-/agentbase-wizard init my-chatbot --langgraph   # scaffold
-/agentbase-llm api-keys create my-chatbot-key   # platform LLM key
-/agentbase-memory create                         # optional memory store
-/agentbase-wizard test local                     # smoke test locally
-/agentbase-deploy deploy                         # build → push → deploy
-/agentbase-monitor runtime-logs <runtime-id>     # watch it run
-```
-
-Or, first time, just:
-
-```text
-/agentbase-wizard
-```
-
-…and follow the prompts.
+AgentBase tích hợp sẵn **vMonitor Platform**: CPU Usage, Memory Usage theo thời gian thực, truy vết từng request qua Distributed Tracing — không cần setup thêm công cụ observability.
 
 ---
 
-## Troubleshooting
+#### SoundCloud không bị block trên datacenter
 
-| Symptom | Fix |
-|---|---|
-| Skill doesn't appear | Confirm the file is at `<skills-dir>/<skill-name>/SKILL.md` with valid `name` + `description` frontmatter, then restart the tool. |
-| `401 Unauthorized` | `GREENNODE_CLIENT_ID` / `GREENNODE_CLIENT_SECRET` missing, expired, or service account lacks IAM policies. |
-| `OOMKilled` during deploy | Pick a larger flavor — ask `/agentbase-deploy` to list eligible flavors and resize the runtime. |
-| Want to resume a half-finished session | State persists in `.agentbase-state.json` — run `/agentbase-wizard resume`. |
-| Different skill behavior across tools | Tightest validator wins (typically Claude Desktop). Re-read the SKILL.md frontmatter; description length / characters may need trimming. |
+YouTube thường chặn datacenter IP. App tự động fallback sang SoundCloud (hoặc dùng `_ytdlp_download` với mobile clients) — người dùng không bao giờ thấy lỗi download.
 
 ---
 
-## Repo Layout
+## What to Customize
 
-```
-greennode-agentbase-skills/
-├── .claude/skills/             # <-- the skills you install
-│   ├── agentbase/              # platform reference
-│   ├── agentbase-wizard/       # guided full-lifecycle wizard
-│   ├── agentbase-deploy/       # build, push, deploy + Container Registry + OpenClaw
-│   ├── agentbase-identity/     # agent identities & outbound auth
-│   ├── agentbase-llm/          # platform LLM API keys & models
-│   ├── agentbase-memory/       # conversation + semantic memory
-│   ├── agentbase-monitor/      # logs, metrics, dashboard
-│   ├── agentbase-gateway/      # Resource Gateway (MCP)
-│   ├── agentbase-policy/       # authorization policies
-│   └── agentbase-teardown/     # delete all resources
-└── README.md
+### Đổi model LLM
+
+Trong `.env`, đặt `LLM_MODEL` thành bất kỳ model nào có trên GreenNode MaaS:
+
+```env
+LLM_MODEL=google/gemma-4-31b-it       # mặc định
+# LLM_MODEL=qwen/qwen2.5-72b-instruct # đa ngôn ngữ tốt hơn
+# LLM_MODEL=minimax/minimax-m1-40k    # context dài
 ```
 
-Each skill folder contains a `SKILL.md` (the contract read by the AI tool) and any helper `scripts/` or `references/` it needs.
+### Đổi số nốt tìm kiếm YouTube/SoundCloud
+
+Trong `app.py`, sửa `ytsearch5:` / `scsearch5:` thành số kết quả mong muốn:
+
+```python
+# app.py, hàm _yt_search và _sc_search
+["yt-dlp", f"ytsearch10:{query} piano", ...]  # tăng lên 10 kết quả
+```
+
+### Tắt chế độ đơn giản hoá beginner
+
+Trong `_run_pipeline` (app.py), bỏ dòng lọc nốt cao nhất để giữ nguyên tất cả nốt:
+
+```python
+# Thay dòng này:
+processed_df = df.loc[df.groupby('grouped_time')['pitch'].idxmax()].reset_index(drop=True)
+# Bằng:
+processed_df = df  # giữ tất cả nốt, không đơn giản hoá
+```
+
+### Đổi màu nốt nhạc
+
+Trong `static/index.html`, tìm phần render nốt rơi:
+
+```javascript
+if (isHit)       ctx.fillStyle = '#50f078';   // xanh lá = đúng
+else if (isWait) ctx.fillStyle = '#ffc832';   // vàng = đang chờ
+else             ctx.fillStyle = k.isBlack ? '#3270dc' : '#5096ff'; // xanh lam = rơi
+```
+
+### Đổi ngôn ngữ phản hồi AI
+
+Trong `app.py`, tìm phần system prompt của LLM feedback và đổi ngôn ngữ:
+
+```python
+{"role": "system", "content": "You are a piano coach. Respond in English."}
+```
 
 ---
 
-## Contributing & Extending
+## Project Structure
 
-- Each skill is just a folder with a `SKILL.md` file — copy an existing one as a template.
-- Frontmatter (`name`, `description`) is a public contract — renaming breaks downstream tools. Update `README.md` cross-references when you rename.
-- Skill descriptions must satisfy the **tightest** client validator (typically Claude Desktop's character limit). Verify before committing.
-- Test the skill end-to-end in Claude Code (or your target client) before opening a PR — descriptions drive auto-routing, so a small wording change can shift which skill is picked.
+```
+Piano_teacher/
+├── app.py                    # FastAPI app — routes, game loop, pipeline
+├── requirements.txt
+├── Dockerfile
+├── .env.example
+│
+├── model/                    # Audio & MIDI processing
+│   ├── input_processor.py    # convert_audio_to_midi (ffmpeg + transkun)
+│   ├── midi_processor.py     # split_midi_hands, extract_right_hand
+│   ├── midi_to_array.py      # mid_to_pd — MIDI → DataFrame
+│   ├── chord_detector.py     # detect key, transpose
+│   └── transkun/             # AI transcription model
+│
+├── static/                   # Frontend
+│   ├── dashboard.html        # Trang chính: tìm kiếm nhạc, danh sách bài
+│   └── index.html            # Game piano: canvas render, WebSocket, MIDI input
+│
+├── artifact/                 # MIDI files đã xử lý (sinh ra lúc runtime)
+│   ├── song_RH.mid           # Tay phải
+│   ├── song_LH.mid           # Tay trái
+│   ├── song_RH_transposed.mid
+│   └── song_RH_processed.mid # File dùng trong game (đơn giản hoá beginner)
+│
+└── uploads/                  # Audio files tạm thời
+```
 
 ---
 
-## Important Notes
+## How GreenNode MaaS is Used
 
-1. **Verify IAM credentials first** — the majority of platform errors are missing `GREENNODE_CLIENT_ID` / `GREENNODE_CLIENT_SECRET` or insufficient policies.
-2. **Validate before deploy** — `/agentbase-wizard test validate`.
-3. **Always `--dry-run` teardown** before the real delete.
-4. **Never commit `.env`** — only `.env.example` is tracked.
-5. **First time? Use `/agentbase-wizard`** — it covers the full 9-step path.
+Tất cả AI calls đi qua **GreenNode MaaS** tại `https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1` qua OpenAI-compatible API:
+
+```python
+# app.py — AI feedback sau mỗi section
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(
+    base_url=os.getenv("LLM_BASE_URL", "https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1"),
+    api_key=os.getenv("LLM_API_KEY"),
+)
+response = await client.chat.completions.create(
+    model=os.getenv("LLM_MODEL", "google/gemma-4-31b-it"),
+    messages=[
+        {"role": "system", "content": "Bạn là giáo viên piano..."},
+        {"role": "user",   "content": f"Kết quả section: {stats}"},
+    ],
+    max_tokens=300,
+    temperature=0.7,
+)
+```
+
+**gemma-4-31b-it** xử lý một nhiệm vụ duy nhất: phân tích kết quả chơi của người dùng (điểm, nốt sai, tốc độ trung bình) và đưa ra lời khuyên ngắn gọn bằng tiếng Việt sau mỗi section luyện tập.

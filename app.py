@@ -254,10 +254,14 @@ def _reset_game(path: str) -> None:
     base_dir = Path(path).parent
     stem_raw = Path(path).stem
     song_stem = stem_raw
-    for suffix in ('_RH', '_LH'):
-        if song_stem.endswith(suffix):
-            song_stem = song_stem[:-len(suffix)]
-            break
+    # Strip pipeline suffixes (_processed, _transposed, _RH, _LH) in any order
+    changed = True
+    while changed:
+        changed = False
+        for suffix in ('_processed', '_transposed', '_RH', '_LH'):
+            if song_stem.endswith(suffix):
+                song_stem = song_stem[:-len(suffix)]
+                changed = True
 
     if g_hand == 'BOTH':
         rh_p = base_dir / f"{song_stem}_RH.mid"

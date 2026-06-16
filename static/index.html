@@ -1,26 +1,194 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="UTF-8" />
-  <title>Piano Game</title>
+  <title>montt · Piano Teacher</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+
     body {
       background: #0a0a12;
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: flex-start;
-      min-height: 100vh;
-      padding: 20px 0;
       font-family: Arial, sans-serif;
+      min-height: 100vh;
+      padding: 12px 0 20px;
+      gap: 8px;
     }
+
+    /* ── Controls bar ─────────────────────────────────────────────────────── */
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      flex-wrap: wrap;
+      justify-content: center;
+      width: 100%;
+      max-width: 1200px;
+      padding: 0 16px;
+    }
+
+    .ctrl-group {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .ctrl-label {
+      color: #44445a;
+      font-size: 12px;
+      margin-right: 2px;
+    }
+    .btn-ctrl {
+      background: #12121a;
+      color: #555570;
+      border: 1px solid #252535;
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    .btn-ctrl:hover { background: #1e1e30; color: #aaaacc; }
+    .btn-ctrl.active {
+      background: #1e3a60;
+      border-color: #2a4a80;
+      color: #77b7ff;
+    }
+
+    #restartBtn {
+      background: #1a1a28;
+      color: #6666aa;
+      border: 1px solid #252535;
+      border-radius: 6px;
+      padding: 5px 14px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    #restartBtn:hover { background: #252540; color: #aaaadd; }
+
+    #backBtn {
+      color: #33334a;
+      font-size: 12px;
+      text-decoration: none;
+      padding: 5px 10px;
+      border-radius: 6px;
+      transition: color .15s;
+    }
+    #backBtn:hover { color: #6666aa; }
+
+    /* ── Canvas ───────────────────────────────────────────────────────────── */
     canvas { display: block; border-radius: 8px; }
+
+    /* ── Wrong note panel ─────────────────────────────────────────────────── */
+    #wrongPanel {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: #2a0a0a;
+      border: 1px solid #6a1a1a;
+      border-radius: 8px;
+      padding: 10px 20px;
+      min-width: 340px;
+      transition: opacity .3s;
+    }
+    #wrongPanel.hidden { display: none; }
+    .wrong-icon { font-size: 22px; }
+    .wrong-body { flex: 1; }
+    .wrong-title {
+      color: #ff6666;
+      font-size: 13px;
+      font-weight: bold;
+      margin-bottom: 3px;
+    }
+    .wrong-detail { color: #884444; font-size: 12px; }
+    #fingerBadge {
+      background: #3a1010;
+      border: 1px solid #6a2020;
+      border-radius: 8px;
+      padding: 6px 12px;
+      text-align: center;
+    }
+    .finger-label { color: #aa6666; font-size: 10px; }
+    .finger-num { color: #ff9988; font-size: 20px; font-weight: bold; line-height: 1; }
+
+    /* ── Restart toast notification ──────────────────────────────────────── */
+    #restartToast {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.88);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 50;
+      background: #1a1200;
+      border: 1.5px solid #cc8800;
+      border-radius: 16px;
+      box-shadow: 0 8px 48px rgba(0,0,0,.7), 0 0 0 1px rgba(255,180,0,.08);
+      padding: 28px 32px 22px;
+      min-width: 320px;
+      max-width: 400px;
+      text-align: center;
+      transition: opacity .22s ease, transform .22s ease;
+    }
+    #restartToast.show {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+      pointer-events: auto;
+    }
+    .toast-icon   { font-size: 36px; margin-bottom: 10px; }
+    .toast-title  { color: #ffc832; font-size: 17px; font-weight: bold; margin-bottom: 6px; }
+    .toast-sub    { color: #886622; font-size: 13px; margin-bottom: 20px; }
+    .toast-btns   { display: flex; flex-direction: column; gap: 8px; }
+    .btn-toast-primary {
+      background: #cc8800;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 0;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-toast-primary:hover { background: #ffaa00; }
+    .btn-toast-secondary {
+      background: #2a2000;
+      color: #ffc832;
+      border: 1px solid #554400;
+      border-radius: 8px;
+      padding: 9px 0;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-toast-secondary:hover { background: #3a2e00; }
+    .btn-toast-dismiss {
+      background: none;
+      color: #443300;
+      border: none;
+      font-size: 12px;
+      cursor: pointer;
+      margin-top: 6px;
+      padding: 4px;
+    }
+    .btn-toast-dismiss:hover { color: #887755; }
+    /* dim backdrop while toast is showing */
+    #toastBackdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.45);
+      z-index: 49;
+      display: none;
+    }
+    #toastBackdrop.show { display: block; }
+
+    /* ── Status row ───────────────────────────────────────────────────────── */
     .status-row {
       display: flex;
       align-items: center;
       gap: 10px;
-      margin-top: 10px;
     }
     #conn  { color: #555; font-size: 13px; }
     #soundToggle {
@@ -32,52 +200,297 @@
       font-size: 12px;
       cursor: pointer;
     }
-    #soundToggle.on {
-      background: #235c38;
-      border-color: #358d54;
-      color: #8dffae;
+    #soundToggle.on { background: #235c38; border-color: #358d54; color: #8dffae; }
+
+    /* ── No song overlay ──────────────────────────────────────────────────── */
+    #noSongOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(10,10,18,.92);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      z-index: 10;
     }
+
+    /* ── Finished overlay ─────────────────────────────────────────────────── */
+    #finishedOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(10,10,18,.88);
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      overflow-y: auto;
+      padding: 20px;
+    }
+    #finishedOverlay.show { display: flex; }
+
+    .overlay-card {
+      background: #13131f;
+      border: 1px solid #2e2e50;
+      border-radius: 20px;
+      padding: 36px 40px;
+      max-width: 560px;
+      width: 100%;
+      box-shadow: 0 0 60px rgba(80,150,255,.12);
+    }
+    .finish-header { text-align: center; margin-bottom: 20px; }
+    .finish-emoji { font-size: 52px; line-height: 1; margin-bottom: 8px; animation: popIn .5s cubic-bezier(.36,2,.6,1); }
+    @keyframes popIn { from { transform: scale(0); opacity:0; } to { transform: scale(1); opacity:1; } }
+    .overlay-card h2 {
+      color: #ffe066;
+      font-size: 26px;
+      font-weight: bold;
+      text-shadow: 0 0 24px rgba(255,200,0,.4);
+    }
+    #scoreDisplay {
+      color: #aaaacc;
+      font-size: 15px;
+      margin-bottom: 24px;
+      line-height: 1.7;
+      text-align: center;
+    }
+    .score-big { color: #ffffff; font-size: 30px; font-weight: bold; }
+    .score-pct { color: #50f078; font-weight: bold; font-size: 20px; }
+
+    .ai-section {
+      background: #0d0d1c;
+      border: 1px solid #1e2050;
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    .ai-section .section-label {
+      color: #7eb8ff;
+      font-size: 11px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      font-weight: bold;
+    }
+    .ai-section p {
+      color: #dde0ff;
+      font-size: 15px;
+      line-height: 1.8;
+    }
+    /* Animated loading dots */
+    .ai-loading { display: inline-flex; gap: 5px; align-items: center; height: 20px; }
+    .ai-loading .dot {
+      width: 7px; height: 7px;
+      background: #5096ff;
+      border-radius: 50%;
+      animation: dotPulse 1.2s ease-in-out infinite;
+    }
+    .ai-loading .dot:nth-child(2) { animation-delay: .2s; }
+    .ai-loading .dot:nth-child(3) { animation-delay: .4s; }
+    @keyframes dotPulse {
+      0%,80%,100% { transform: scale(0.6); opacity:.4; }
+      40%          { transform: scale(1);   opacity:1;  }
+    }
+
+    .next-practice {
+      background: #0e1a0e;
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 18px;
+    }
+    .next-practice .section-label {
+      color: #50f078;
+      font-size: 11px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .next-practice p { color: #ccddcc; font-size: 14px; line-height: 1.6; }
+
+    .recs-section { margin-bottom: 18px; }
+    .recs-section .section-label {
+      color: #ffc832;
+      font-size: 11px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .recs-list { display: flex; flex-wrap: wrap; gap: 8px; }
+    .rec-btn {
+      background: #1a1a00;
+      color: #ffc832;
+      border: 1px solid #443300;
+      border-radius: 6px;
+      padding: 7px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .rec-btn:hover { background: #2a2a00; }
+
+    .overlay-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .overlay-actions button {
+      background: #5096ff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 11px 24px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .overlay-actions button:hover { background: #6aaaff; }
+    .overlay-actions a {
+      background: #12121a;
+      color: #6666aa;
+      border: 1px solid #252535;
+      border-radius: 8px;
+      padding: 11px 24px;
+      font-size: 14px;
+      text-decoration: none;
+      transition: background .15s;
+    }
+    .overlay-actions a:hover { background: #1e1e30; color: #aaaadd; }
   </style>
 </head>
 <body>
+
+  <!-- Controls bar -->
+  <div id="controls">
+    <div class="ctrl-group">
+      <span class="ctrl-label">Tay:</span>
+      <button class="btn-ctrl active" data-hand="RH">Tay phải</button>
+      <button class="btn-ctrl"        data-hand="LH">Tay trái</button>
+      <button class="btn-ctrl"        data-hand="BOTH">Cả hai</button>
+    </div>
+    <div class="ctrl-group">
+      <span class="ctrl-label">Tốc độ:</span>
+      <button class="btn-ctrl" data-tempo="0.5">50%</button>
+      <button class="btn-ctrl" data-tempo="0.75">75%</button>
+      <button class="btn-ctrl active" data-tempo="1.0">100%</button>
+    </div>
+    <button id="restartBtn">↺ Bắt đầu lại</button>
+    <a id="backBtn" href="/">← Dashboard</a>
+  </div>
+
   <canvas id="game"></canvas>
+
+  <!-- Wrong note feedback -->
+  <div id="wrongPanel" class="hidden">
+    <div class="wrong-icon">✗</div>
+    <div class="wrong-body">
+      <div class="wrong-title" id="wrongTitle"></div>
+      <div class="wrong-detail" id="wrongDetail"></div>
+    </div>
+    <div id="fingerBadge">
+      <div class="finger-label">Ngón</div>
+      <div class="finger-num" id="fingerNum">—</div>
+    </div>
+  </div>
+
+  <!-- Dim backdrop for toast -->
+  <div id="toastBackdrop"></div>
+
+  <!-- Restart toast: appears once when section mistakes >= 3 -->
+  <div id="restartToast">
+    <div class="toast-icon">⚠️</div>
+    <div class="toast-title">Bạn đã sai 3 lần!</div>
+    <div class="toast-sub">Muốn thử lại với tốc độ chậm hơn không?</div>
+    <div class="toast-btns">
+      <button class="btn-toast-primary"    onclick="setTempoAndRestart(0.75); dismissToast()">↺ Bắt đầu lại (75%)</button>
+      <button class="btn-toast-primary"    onclick="setTempoAndRestart(0.5);  dismissToast()">↺ Bắt đầu lại (50%)</button>
+      <button class="btn-toast-secondary"  onclick="restartGame();            dismissToast()">↺ Cùng tốc độ</button>
+      <button class="btn-toast-dismiss"    onclick="dismissToast()">Tiếp tục luyện →</button>
+    </div>
+  </div>
+
   <div class="status-row">
     <button id="soundToggle" type="button">Sound off</button>
     <div id="conn">Connecting to server...</div>
   </div>
 
-<script>
-// ─── Constants (mirror server values) ────────────────────────────────────────
-const START_MIDI  = 36, END_MIDI = 95;
-const IS_BLACK    = new Set([1, 3, 6, 8, 10]);
-const NOTE_NAMES  = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-const WW = 36, WH = 140, BW = 22, BH = 88;
-const PAD_X    = 20;
-const HEADER_H = 55;
-const FALL_H   = 440;
-const LOOK_AHEAD  = 4.0;
-const FALL_SPEED  = FALL_H / LOOK_AHEAD;
-const PIANO_TOP   = HEADER_H + FALL_H;
-const HIT_LINE_Y  = PIANO_TOP;
+  <!-- No song overlay -->
+  <div id="noSongOverlay">
+    <div style="font-size:48px">🎵</div>
+    <div style="color:#eeeeff;font-size:22px;font-weight:bold">Chưa có bài nhạc nào</div>
+    <div style="color:#44445a;font-size:14px">Vào Dashboard để tải hoặc chọn một bài trước</div>
+    <a href="/" style="background:#5096ff;color:#fff;border:none;border-radius:8px;
+       padding:12px 28px;font-size:15px;cursor:pointer;text-decoration:none">← Về Dashboard</a>
+  </div>
 
-// ─── Build key positions ──────────────────────────────────────────────────────
+  <!-- Confetti canvas (appears briefly on finish) -->
+  <canvas id="confettiCanvas" style="
+    position:fixed;inset:0;width:100%;height:100%;
+    pointer-events:none;z-index:60;display:none;
+  "></canvas>
+
+  <!-- Finished overlay with AI feedback -->
+  <div id="finishedOverlay">
+    <div class="overlay-card">
+      <div class="finish-header">
+        <div class="finish-emoji">🎉</div>
+        <h2>Xuất sắc! Hoàn thành rồi!</h2>
+      </div>
+      <div id="scoreDisplay"></div>
+
+      <div class="ai-section">
+        <div class="section-label">✨ Nhận xét từ giáo viên</div>
+        <p id="aiFeedbackText">
+          <span class="ai-loading">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          </span>
+        </p>
+      </div>
+
+      <div class="next-practice" id="nextPracticeBox" style="display:none">
+        <div class="section-label">🎯 Luyện tập tiếp theo</div>
+        <p id="nextPracticeText"></p>
+      </div>
+
+      <div class="recs-section" id="recsSection" style="display:none">
+        <div class="section-label">🎵 Gợi ý bài tiếp theo</div>
+        <div class="recs-list" id="recsList"></div>
+      </div>
+
+      <div class="overlay-actions">
+        <button onclick="restartFromOverlay()">↺ Luyện lại</button>
+        <a href="/">← Dashboard</a>
+      </div>
+    </div>
+  </div>
+
+<script>
+// ─── Constants ────────────────────────────────────────────────────────────────
+const START_MIDI = 36, END_MIDI = 95;
+const IS_BLACK   = new Set([1, 3, 6, 8, 10]);
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const WW = 36, WH = 140, BW = 22, BH = 88;
+const PAD_X      = 20;
+const HEADER_H   = 64;
+const FALL_H     = 440;
+const LOOK_AHEAD = 4.0;
+const FALL_SPEED = FALL_H / LOOK_AHEAD;
+const PIANO_TOP  = HEADER_H + FALL_H;
+const HIT_LINE_Y = PIANO_TOP;
+
+// ─── Key positions ────────────────────────────────────────────────────────────
 const keys = {};
 let whiteCount = 0;
 for (let p = START_MIDI; p <= END_MIDI; p++) {
-  if (!IS_BLACK.has(p % 12)) {
-    keys[p] = { x: whiteCount * WW, isBlack: false };
-    whiteCount++;
-  }
+  if (!IS_BLACK.has(p % 12)) { keys[p] = { x: whiteCount * WW, isBlack: false }; whiteCount++; }
 }
 for (let p = START_MIDI; p <= END_MIDI; p++) {
-  if (IS_BLACK.has(p % 12) && keys[p - 1]) {
+  if (IS_BLACK.has(p % 12) && keys[p - 1])
     keys[p] = { x: keys[p - 1].x + WW - Math.floor(BW / 2), isBlack: true };
-  }
 }
 const WINDOW_W = whiteCount * WW + PAD_X * 2;
 const WINDOW_H = HEADER_H + FALL_H + WH + 20;
 
-// ─── Canvas setup (HiDPI) ─────────────────────────────────────────────────────
+// ─── Canvas ───────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('game');
 const dpr    = window.devicePixelRatio || 1;
 canvas.width  = WINDOW_W * dpr;
@@ -95,30 +508,364 @@ let gameStatus  = 'LOADING';
 let score = 0, total = 0;
 let activeNotes = [], waitPitches = [], hitPitches = [];
 
+// Teacher-agent state
+let wrongNote       = null;       // {pressed, required, finger, hand}
+let wrongNoteTimer  = null;
+let sectionMistakes = 0;
+let suggestSlow     = false;
+let prevSuggestSlow = false;      // edge-detect: show toast only on false→true transition
+let currentTempo    = 1.0;
+let currentHand     = 'RH';
+let finishedShown   = false;
+
 function liveGameTime() {
   if (gameStatus !== 'PLAYING') return serverTime;
   return serverTime + (performance.now() - serverStamp) / 1000;
 }
 
+// ─── Utility ──────────────────────────────────────────────────────────────────
+function pitchName(p) {
+  return NOTE_NAMES[p % 12] + (Math.floor(p / 12) - 1);
+}
+
+function handLabel(h) {
+  return h === 'RH' ? 'tay phải' : h === 'LH' ? 'tay trái' : 'cả hai tay';
+}
+
+// ─── API calls ────────────────────────────────────────────────────────────────
+async function post(url, body = {}) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+async function setTempoOnServer(t) {
+  await post('/set-tempo', { tempo: t });
+  currentTempo = t;
+  updateTempoButtons();
+}
+
+async function setHandOnServer(h) {
+  await post('/set-hand', { hand: h });
+  currentHand = h;
+  updateHandButtons();
+  finishedShown = false;
+  // Refresh the notes array so the canvas draws the new hand's notes immediately
+  const data = await fetch('/notes').then(r => r.json());
+  allNotes = data.notes;
+  total    = data.total;
+  // Reset client-side rendering state to avoid stale highlights
+  activeNotes  = [];
+  waitPitches  = [];
+  hitPitches   = [];
+  wrongNote    = null;
+  sectionMistakes = 0;
+  prevSuggestSlow = false;
+  dismissToast();
+  hideFinished();
+}
+
+async function restartGame() {
+  dismissToast();
+  hideFinished();
+  finishedShown = false;
+  await post('/restart');
+}
+
+async function setTempoAndRestart(t) {
+  await setTempoOnServer(t);
+  await restartGame();
+}
+
+async function loadSessionFeedback() {
+  try {
+    const data = await fetch('/session-feedback').then(r => r.json());
+    renderFeedback(data);
+  } catch (e) {
+    document.getElementById('aiFeedbackText').textContent =
+      'Không thể tải nhận xét. Vui lòng thử lại.';
+  }
+}
+
+// ─── UI update helpers ────────────────────────────────────────────────────────
+function updateHandButtons() {
+  document.querySelectorAll('[data-hand]').forEach(b => {
+    b.classList.toggle('active', b.dataset.hand === currentHand);
+  });
+}
+
+function updateTempoButtons() {
+  document.querySelectorAll('[data-tempo]').forEach(b => {
+    b.classList.toggle('active', parseFloat(b.dataset.tempo) === currentTempo);
+  });
+}
+
+function showWrongNote(wn) {
+  if (!wn) return;
+  wrongNote = wn;
+  const pressed  = pitchName(wn.pressed);
+  const required = wn.required.map(pitchName).join(' + ');
+  const hand     = handLabel(wn.hand);
+
+  document.getElementById('wrongTitle').textContent =
+    `✗ Bạn bấm ${pressed}  →  Cần bấm: ${required}`;
+  document.getElementById('wrongDetail').textContent =
+    `${hand.charAt(0).toUpperCase() + hand.slice(1)}`;
+  document.getElementById('fingerNum').textContent = wn.finger;
+
+  document.getElementById('wrongPanel').classList.remove('hidden');
+
+  clearTimeout(wrongNoteTimer);
+  wrongNoteTimer = setTimeout(() => {
+    document.getElementById('wrongPanel').classList.add('hidden');
+    wrongNote = null;
+  }, 2000);
+}
+
+let toastDismissed   = false;
+let toastAutoTimer   = null;
+
+function showRestartToast() {
+  if (toastDismissed) return;
+  document.getElementById('restartToast').classList.add('show');
+  document.getElementById('toastBackdrop').classList.add('show');
+  clearTimeout(toastAutoTimer);
+  toastAutoTimer = setTimeout(dismissToast, 8000);
+}
+
+function dismissToast() {
+  toastDismissed = true;
+  document.getElementById('restartToast').classList.remove('show');
+  document.getElementById('toastBackdrop').classList.remove('show');
+  clearTimeout(toastAutoTimer);
+}
+
+// ─── Celebration effects ──────────────────────────────────────────────────────
+function playApplause() {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const claps = 10;
+    for (let i = 0; i < claps; i++) {
+      const t0 = ac.currentTime + i * 0.11 + (Math.random() * 0.04);
+      const dur = 0.07 + Math.random() * 0.04;
+      const buf = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let j = 0; j < d.length; j++)
+        d[j] = (Math.random() * 2 - 1) * Math.exp(-j / (d.length * 0.25));
+
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+
+      const bp = ac.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 900 + Math.random() * 600;
+      bp.Q.value = 0.7;
+
+      const gain = ac.createGain();
+      gain.gain.setValueAtTime(0.28, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+
+      src.connect(bp); bp.connect(gain); gain.connect(ac.destination);
+      src.start(t0);
+    }
+  } catch (_) {}
+}
+
+function launchConfetti() {
+  const cv = document.getElementById('confettiCanvas');
+  cv.width  = window.innerWidth;
+  cv.height = window.innerHeight;
+  cv.style.display = 'block';
+  const cx = cv.getContext('2d');
+  const COLORS = ['#ffe066','#ff4488','#50f078','#5096ff','#ff8800','#cc44ff','#44ddff'];
+  const pieces = Array.from({ length: 100 }, () => ({
+    x:  Math.random() * cv.width,
+    y: -20 - Math.random() * 80,
+    vx: (Math.random() - 0.5) * 5,
+    vy: Math.random() * 4 + 2,
+    r:  Math.random() * Math.PI * 2,
+    rs: (Math.random() - 0.5) * 0.18,
+    w:  Math.random() * 10 + 5,
+    h:  Math.random() * 6 + 3,
+    color: COLORS[Math.floor(Math.random() * COLORS.length)],
+  }));
+  let frame = 0;
+  const TOTAL = 150;
+  (function draw() {
+    cx.clearRect(0, 0, cv.width, cv.height);
+    const alpha = frame < 100 ? 1 : Math.max(0, 1 - (frame - 100) / 50);
+    pieces.forEach(p => {
+      p.x += p.vx; p.y += p.vy; p.r += p.rs; p.vy += 0.07;
+      cx.save();
+      cx.translate(p.x, p.y);
+      cx.rotate(p.r);
+      cx.globalAlpha = alpha;
+      cx.fillStyle = p.color;
+      cx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      cx.restore();
+    });
+    if (++frame < TOTAL) requestAnimationFrame(draw);
+    else cv.style.display = 'none';
+  })();
+}
+
+function showFinished() {
+  document.getElementById('finishedOverlay').classList.add('show');
+}
+
+function hideFinished() {
+  document.getElementById('finishedOverlay').classList.remove('show');
+}
+
+function restartFromOverlay() {
+  hideFinished();
+  finishedShown = false;
+  post('/restart');
+}
+
+function renderFeedback(data) {
+  // Score
+  const pct = data.total ? Math.round(data.accuracy * 100) : 0;
+  document.getElementById('scoreDisplay').innerHTML =
+    `<span class="score-big">${data.correct} / ${data.total}</span> nốt đúng — ` +
+    `<span class="score-pct">${pct}%</span><br>` +
+    `Tay: ${handLabel(data.hand || currentHand)} · ` +
+    `Tốc độ: ${Math.round((data.tempo || currentTempo) * 100)}% · ` +
+    `Sai: ${data.wrong_count || 0} lần`;
+
+  const ai = data.ai_feedback;
+  if (ai && !ai.error) {
+    document.getElementById('aiFeedbackText').innerHTML = ai.feedback || '';
+
+    // Next practice
+    if (ai.next_practice) {
+      document.getElementById('nextPracticeText').textContent = ai.next_practice;
+      document.getElementById('nextPracticeBox').style.display = 'block';
+    }
+
+    // Song recommendations
+    if (ai.song_recommendations && ai.song_recommendations.length) {
+      const list = document.getElementById('recsList');
+      list.innerHTML = ai.song_recommendations.map(s =>
+        `<button class="rec-btn" onclick="searchSong('${s.replace(/'/g,"\\'")}')">🎵 ${s}</button>`
+      ).join('');
+      document.getElementById('recsSection').style.display = 'block';
+    }
+  } else {
+    document.getElementById('aiFeedbackText').textContent =
+      ai && ai.error
+        ? `Không thể tải nhận xét: ${ai.error}`
+        : `Hoàn thành! Điểm: ${data.correct}/${data.total}`;
+  }
+}
+
+function searchSong(name) {
+  sessionStorage.setItem('searchQuery', name);
+  window.location.href = '/';
+}
+
+// ─── Controls wiring ──────────────────────────────────────────────────────────
+document.querySelectorAll('[data-hand]').forEach(btn => {
+  btn.addEventListener('click', () => setHandOnServer(btn.dataset.hand));
+});
+
+document.querySelectorAll('[data-tempo]').forEach(btn => {
+  btn.addEventListener('click', () => setTempoOnServer(parseFloat(btn.dataset.tempo)));
+});
+
+document.getElementById('restartBtn').addEventListener('click', restartGame);
+
 // ─── WebSocket ────────────────────────────────────────────────────────────────
-const connDiv = document.getElementById('conn');
+const connDiv     = document.getElementById('conn');
 const soundToggle = document.getElementById('soundToggle');
-let ws = null;
+let ws         = null;
 let midiStatus = 'MIDI: not connected';
 
-// ─── Browser audio ───────────────────────────────────────────────────────────
-let audioCtx = null;
-let masterGain = null;
-let soundEnabled = false;
-const soundingNotes = new Map();
+async function init() {
+  const res  = await fetch('/notes');
+  const data = await res.json();
+  allNotes = data.notes;
+  total    = data.total;
 
-function midiToHz(pitch) {
-  return 440 * Math.pow(2, (pitch - 69) / 12);
+  const noSong = document.getElementById('noSongOverlay');
+  if (allNotes.length === 0) {
+    noSong.style.display = 'flex';
+    connDiv.textContent  = 'No song loaded';
+    return;
+  }
+  noSong.style.display = 'none';
+
+  const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${wsProto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    connDiv.textContent = `Connected · ${midiStatus}`;
+    initWebMidi();
+  };
+  ws.onclose = () => { connDiv.textContent = 'Disconnected – refresh to reconnect'; };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type !== 'state') return;
+
+    const prevStatus = gameStatus;
+
+    serverTime  = msg.game_time;
+    serverStamp = performance.now();
+    gameStatus  = msg.status;
+    score       = msg.score;
+    total       = msg.total;
+    activeNotes = msg.active_notes;
+    waitPitches = msg.wait_pitches;
+    hitPitches  = msg.hit_pitches;
+
+    // Teacher fields
+    currentTempo    = msg.tempo    ?? currentTempo;
+    currentHand     = msg.hand     ?? currentHand;
+    sectionMistakes = msg.section_mistakes ?? 0;
+    suggestSlow     = msg.suggest_slow ?? false;
+
+    if (msg.wrong_note) showWrongNote(msg.wrong_note);
+
+    // Show toast only on false→true edge (not on every frame while still true)
+    if (suggestSlow && !prevSuggestSlow) showRestartToast();
+    // Reset dismissed flag when section changes (no longer suggesting slow → player moved on)
+    if (!suggestSlow && prevSuggestSlow) { toastDismissed = false; }
+    prevSuggestSlow = suggestSlow;
+
+    // Finished overlay (show once)
+    if (gameStatus === 'FINISHED' && !finishedShown) {
+      finishedShown = true;
+      const pct = total ? Math.round(score / total * 100) : 0;
+      const star = pct >= 90 ? '⭐⭐⭐' : pct >= 60 ? '⭐⭐' : '⭐';
+      document.getElementById('scoreDisplay').innerHTML =
+        `<span class="score-big">${score} / ${total}</span> nốt đúng &nbsp;` +
+        `<span class="score-pct">${pct}%</span> ${star}<br>` +
+        `<small style="color:#555577">Tay: ${handLabel(currentHand)} · Tốc độ: ${Math.round(currentTempo*100)}%</small>`;
+      document.getElementById('nextPracticeBox').style.display  = 'none';
+      document.getElementById('recsSection').style.display      = 'none';
+      playApplause();
+      launchConfetti();
+      showFinished();
+      loadSessionFeedback();
+    }
+  };
 }
+
+// ─── Browser audio ────────────────────────────────────────────────────────────
+let audioCtx   = null;
+let masterGain = null;
+let soundEnabled     = false;
+const soundingNotes  = new Map();
+
+function midiToHz(p) { return 440 * Math.pow(2, (p - 69) / 12); }
 
 function ensureAudio() {
   if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx   = new (window.AudioContext || window.webkitAudioContext)();
     masterGain = audioCtx.createGain();
     masterGain.gain.value = 0.18;
     masterGain.connect(audioCtx.destination);
@@ -126,8 +873,8 @@ function ensureAudio() {
   if (audioCtx.state === 'suspended') audioCtx.resume();
 }
 
-function setSoundEnabled(enabled) {
-  soundEnabled = enabled;
+function setSoundEnabled(en) {
+  soundEnabled = en;
   if (soundEnabled) ensureAudio();
   soundToggle.textContent = soundEnabled ? 'Sound on' : 'Sound off';
   soundToggle.classList.toggle('on', soundEnabled);
@@ -137,18 +884,15 @@ function playNote(pitch, velocity = 90) {
   if (!soundEnabled) return;
   ensureAudio();
   stopNote(pitch);
-
-  const now = audioCtx.currentTime;
-  const osc = audioCtx.createOscillator();
+  const now  = audioCtx.currentTime;
+  const osc  = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
-  const level = Math.max(0.05, Math.min(1, velocity / 127)) * 0.5;
-
+  const lvl  = Math.max(0.05, Math.min(1, velocity / 127)) * 0.5;
   osc.type = 'triangle';
   osc.frequency.setValueAtTime(midiToHz(pitch), now);
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(level, now + 0.015);
-  gain.gain.exponentialRampToValueAtTime(level * 0.55, now + 0.16);
-
+  gain.gain.exponentialRampToValueAtTime(lvl,        now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(lvl * 0.55, now + 0.16);
   osc.connect(gain);
   gain.connect(masterGain);
   osc.start(now);
@@ -168,37 +912,77 @@ function stopNote(pitch) {
 
 soundToggle.addEventListener('click', () => setSoundEnabled(!soundEnabled));
 
-async function init() {
-  const res = await fetch('/notes');
-  const data = await res.json();
-  allNotes = data.notes;
-  total    = data.total;
-  connDiv.textContent = `${allNotes.length} notes loaded`;
+// ─── Mouse / Touch piano input ────────────────────────────────────────────────
+const mousePressedKeys = new Set();
 
-  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${wsProtocol}://${location.host}/ws`);
-  ws.onopen  = () => {
-    connDiv.textContent = `Connected · ${midiStatus}`;
-    initWebMidi();
-  };
-  ws.onclose = () => { connDiv.textContent = 'Disconnected - refresh to reconnect'; };
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'state') {
-      serverTime  = msg.game_time;
-      serverStamp = performance.now();
-      gameStatus  = msg.status;
-      score       = msg.score;
-      total       = msg.total;
-      activeNotes = msg.active_notes;
-      waitPitches = msg.wait_pitches;
-      hitPitches  = msg.hit_pitches;
-    }
-  };
+function noteAtXY(cx, cy) {
+  if (cy < PIANO_TOP) return null;
+  for (let p = START_MIDI; p <= END_MIDI; p++) {
+    const k = keys[p];
+    if (!k || !k.isBlack) continue;
+    if (cy <= PIANO_TOP + BH && cx >= k.x + PAD_X && cx < k.x + PAD_X + BW) return p;
+  }
+  for (let p = START_MIDI; p <= END_MIDI; p++) {
+    const k = keys[p];
+    if (!k || k.isBlack) continue;
+    if (cy <= PIANO_TOP + WH && cx >= k.x + PAD_X && cx < k.x + PAD_X + WW - 1) return p;
+  }
+  return null;
 }
 
-// ─── Browser MIDI input ──────────────────────────────────────────────────────
+function mousePress(p) {
+  if (mousePressedKeys.has(p)) return;
+  mousePressedKeys.add(p);
+  setSoundEnabled(true);
+  playNote(p, 90);
+  sendMidi('note_on', p, 90);
+}
 
+function mouseRelease(p) {
+  if (!mousePressedKeys.has(p)) return;
+  mousePressedKeys.delete(p);
+  stopNote(p);
+  sendMidi('note_off', p, 0);
+}
+
+function mouseReleaseAll() {
+  for (const p of [...mousePressedKeys]) mouseRelease(p);
+}
+
+canvas.addEventListener('mousedown', e => {
+  const r = canvas.getBoundingClientRect();
+  const p = noteAtXY(e.clientX - r.left, e.clientY - r.top);
+  if (p !== null) mousePress(p);
+});
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  const p = noteAtXY(e.clientX - r.left, e.clientY - r.top);
+  canvas.style.cursor = p !== null ? 'pointer' : 'default';
+  if (e.buttons === 0) { mouseReleaseAll(); return; }
+  if (p !== null) { mouseReleaseAll(); mousePress(p); }
+});
+canvas.addEventListener('mouseup',    mouseReleaseAll);
+canvas.addEventListener('mouseleave', mouseReleaseAll);
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  for (const t of e.changedTouches) {
+    const p = noteAtXY(t.clientX - r.left, t.clientY - r.top);
+    if (p !== null) mousePress(p);
+  }
+}, { passive: false });
+canvas.addEventListener('touchend',  e => { e.preventDefault(); mouseReleaseAll(); }, { passive: false });
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  mouseReleaseAll();
+  for (const t of e.changedTouches) {
+    const p = noteAtXY(t.clientX - r.left, t.clientY - r.top);
+    if (p !== null) mousePress(p);
+  }
+}, { passive: false });
+
+// ─── Browser MIDI ─────────────────────────────────────────────────────────────
 function sendMidi(event, note, velocity) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: 'midi', event, note, velocity }));
@@ -210,45 +994,32 @@ async function initWebMidi() {
     connDiv.textContent = `Connected · ${midiStatus}`;
     return;
   }
-
   try {
     const access = await navigator.requestMIDIAccess();
-    const attachInputs = () => {
+    const attach = () => {
       const inputs = [...access.inputs.values()];
       midiStatus = inputs.length
-        ? `MIDI: ${inputs.map(input => input.name || 'Keyboard').join(', ')}`
+        ? `MIDI: ${inputs.map(i => i.name || 'Keyboard').join(', ')}`
         : 'MIDI: no device';
       connDiv.textContent = `Connected · ${midiStatus}`;
-
-      for (const input of inputs) {
-        input.onmidimessage = ({ data }) => {
+      for (const inp of inputs) {
+        inp.onmidimessage = ({ data }) => {
           const [status, note, velocity = 0] = data;
-          const command = status & 0xf0;
-          if (command === 0x90 && velocity > 0) {
-            playNote(note, velocity);
-            sendMidi('note_on', note, velocity);
-          } else if (command === 0x80 || command === 0x90) {
-            stopNote(note);
-            sendMidi('note_off', note, 0);
-          }
+          const cmd = status & 0xf0;
+          if (cmd === 0x90 && velocity > 0) { playNote(note, velocity); sendMidi('note_on',  note, velocity); }
+          else if (cmd === 0x80 || cmd === 0x90) { stopNote(note); sendMidi('note_off', note, 0); }
         };
       }
     };
-
-    attachInputs();
-    access.onstatechange = attachInputs;
-  } catch (err) {
-    midiStatus = `MIDI: permission denied`;
+    attach();
+    access.onstatechange = attach;
+  } catch {
+    midiStatus = 'MIDI: permission denied';
     connDiv.textContent = `Connected · ${midiStatus}`;
   }
 }
 
 // ─── Rendering ────────────────────────────────────────────────────────────────
-
-function pitchName(p) {
-  return NOTE_NAMES[p % 12] + (Math.floor(p / 12) - 1);
-}
-
 function render() {
   const gt = liveGameTime();
   ctx.fillStyle = '#12121a';
@@ -264,24 +1035,22 @@ function render() {
     ctx.fillRect(k.x + PAD_X, HEADER_H, 1, FALL_H);
   }
 
-  // ── Falling notes ──────────────────────────────────────────────────────────
+  // Falling notes
   const visEnd = gt + LOOK_AHEAD + 0.5;
   for (const note of allNotes) {
     if (note.start > visEnd) break;
-    if (note.end < gt - 0.2)  continue;
+    if (note.end < gt - 0.2) continue;
     const k = keys[note.pitch];
     if (!k) continue;
-
-    const x = k.x + PAD_X;
-    const w = k.isBlack ? BW : WW - 1;
-    const h = Math.max(8, (note.end - note.start) * FALL_SPEED);
+    const x   = k.x + PAD_X;
+    const w   = k.isBlack ? BW : WW - 1;
+    const h   = Math.max(8, (note.end - note.start) * FALL_SPEED);
     const bot = HEADER_H + FALL_H - (note.start - gt) * FALL_SPEED;
     const top = bot - h;
-
-    const drawTop = Math.max(top, HEADER_H);
-    const drawBot = Math.min(bot, HEADER_H + FALL_H);
-    const drawH   = drawBot - drawTop;
-    if (drawH <= 0) continue;
+    const dT  = Math.max(top, HEADER_H);
+    const dB  = Math.min(bot, HEADER_H + FALL_H);
+    const dH  = dB - dT;
+    if (dH <= 0) continue;
 
     const isWait = waitPitches.includes(note.pitch);
     const isHit  = hitPitches.includes(note.pitch);
@@ -289,32 +1058,37 @@ function render() {
     else if (isWait) ctx.fillStyle = '#ffc832';
     else             ctx.fillStyle = k.isBlack ? '#3270dc' : '#5096ff';
 
-    ctx.fillRect(x, drawTop, w, drawH);
+    ctx.fillRect(x, dT, w, dH);
     ctx.strokeStyle = '#12121a';
     ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, drawTop + 0.5, w - 1, drawH - 1);
+    ctx.strokeRect(x + .5, dT + .5, w - 1, dH - 1);
   }
 
   // Hit line
   ctx.fillStyle = '#ffc832';
   ctx.fillRect(PAD_X, HIT_LINE_Y - 2, whiteCount * WW, 3);
 
-  // ── Piano ──────────────────────────────────────────────────────────────────
-  // White keys
+  // Piano – white keys
   for (let p = START_MIDI; p <= END_MIDI; p++) {
     const k = keys[p];
     if (!k || k.isBlack) continue;
-    const x = k.x + PAD_X;
-    const needsPress = waitPitches.includes(p) && !hitPitches.includes(p);
+    const x      = k.x + PAD_X;
+    const needed = waitPitches.includes(p) && !hitPitches.includes(p);
+    const active = activeNotes.includes(p) || mousePressedKeys.has(p);
 
-    if (activeNotes.includes(p))  ctx.fillStyle = '#64b4ff';
-    else if (needsPress)          ctx.fillStyle = '#ffc832';
-    else                          ctx.fillStyle = '#ffffff';
+    // Wrong note highlight: if this is a required key while wrong was pressed
+    const isRequired = waitPitches.includes(p);
+    const isWrongHighlight = wrongNote && isRequired && !hitPitches.includes(p);
+
+    if (active)                ctx.fillStyle = '#64b4ff';
+    else if (isWrongHighlight) ctx.fillStyle = '#ff6644';  // orange-red for hint
+    else if (needed)           ctx.fillStyle = '#ffc832';
+    else                       ctx.fillStyle = '#ffffff';
 
     ctx.fillRect(x, PIANO_TOP, WW - 1, WH);
     ctx.strokeStyle = '#505060';
     ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, PIANO_TOP + 0.5, WW - 2, WH - 1);
+    ctx.strokeRect(x + .5, PIANO_TOP + .5, WW - 2, WH - 1);
 
     if (p % 12 === 0) {
       ctx.fillStyle = '#888';
@@ -322,44 +1096,90 @@ function render() {
       ctx.fillText(`C${Math.floor(p/12)-1}`, x + 3, PIANO_TOP + WH - 5);
     }
   }
-  // Black keys
+
+  // Piano – black keys
   for (let p = START_MIDI; p <= END_MIDI; p++) {
     const k = keys[p];
     if (!k || !k.isBlack) continue;
-    const x = k.x + PAD_X;
-    const needsPress = waitPitches.includes(p) && !hitPitches.includes(p);
+    const x      = k.x + PAD_X;
+    const needed = waitPitches.includes(p) && !hitPitches.includes(p);
+    const active = activeNotes.includes(p) || mousePressedKeys.has(p);
+    const isWrongHighlight = wrongNote && needed;
 
-    if (activeNotes.includes(p))  ctx.fillStyle = '#3278c8';
-    else if (needsPress)          ctx.fillStyle = '#b08800';
-    else                          ctx.fillStyle = '#0f0f0f';
+    if (active)                ctx.fillStyle = '#3278c8';
+    else if (isWrongHighlight) ctx.fillStyle = '#993322';
+    else if (needed)           ctx.fillStyle = '#b08800';
+    else                       ctx.fillStyle = '#0f0f0f';
 
     ctx.fillRect(x, PIANO_TOP, BW, BH);
   }
 
-  // ── Header ─────────────────────────────────────────────────────────────────
+  // Header
+  ctx.clearRect(0, 0, WINDOW_W, HEADER_H);
+  ctx.fillStyle = '#12121a';
+  ctx.fillRect(0, 0, WINDOW_W, HEADER_H);
+
   if (gameStatus === 'FINISHED') {
     ctx.fillStyle = '#50f078';
-    ctx.font = 'bold 28px Arial';
-    ctx.fillText(`Complete!   Score: ${score} / ${total}`, PAD_X, 36);
+    ctx.font = 'bold 26px Arial';
+    const pct = total ? Math.round(score / total * 100) : 0;
+    ctx.fillText(`Hoàn thành!  ${score}/${total}  (${pct}%)`, PAD_X, 36);
 
   } else if (gameStatus === 'WAITING') {
-    const needed = waitPitches
-      .filter(p => !hitPitches.includes(p))
-      .map(pitchName).join('  +  ');
-    const done = hitPitches.map(pitchName).join('  ');
-    ctx.fillStyle = '#ffc832';
-    ctx.font = 'bold 20px Arial';
-    ctx.fillText(`Play: ${needed}`, PAD_X, 28);
-    if (done) {
+    const needed       = waitPitches.filter(p => !hitPitches.includes(p));
+    const neededNames  = needed.map(pitchName).join('  +  ');
+    const doneNames    = hitPitches.map(pitchName).join('  ');
+    const mistakeColor = sectionMistakes >= 3 ? '#ff6644' : sectionMistakes >= 1 ? '#ffa050' : '#ffc832';
+
+    ctx.fillStyle = mistakeColor;
+    ctx.font = 'bold 18px Arial';
+    ctx.fillText(`Nhấn: ${neededNames}`, PAD_X, 26);
+
+    if (doneNames) {
       ctx.fillStyle = '#50f078';
-      ctx.font = '14px Arial';
-      ctx.fillText(`✓ ${done}`, PAD_X, 48);
+      ctx.font = '13px Arial';
+      ctx.fillText(`✓ ${doneNames}`, PAD_X, 44);
+    }
+
+    // Mistake counter
+    if (sectionMistakes > 0) {
+      ctx.fillStyle = mistakeColor;
+      ctx.font = `bold 12px Arial`;
+      ctx.fillText(`⚠ ${sectionMistakes} lần sai`, WINDOW_W - PAD_X - 80, 26);
+    }
+
+    // Tempo badge
+    if (currentTempo < 1.0) {
+      ctx.fillStyle = '#5096ff';
+      ctx.font = '11px Arial';
+      ctx.fillText(`${Math.round(currentTempo * 100)}%`, WINDOW_W - PAD_X - 30, 44);
+    }
+
+    // Down-arrows for needed keys
+    ctx.fillStyle = mistakeColor;
+    for (const p of needed) {
+      const k = keys[p];
+      if (!k) continue;
+      const kx = k.x + PAD_X + (k.isBlack ? BW : WW - 1) / 2;
+      const ky = PIANO_TOP - 6;
+      ctx.beginPath();
+      ctx.moveTo(kx,     ky);
+      ctx.lineTo(kx - 7, ky - 14);
+      ctx.lineTo(kx + 7, ky - 14);
+      ctx.closePath();
+      ctx.fill();
     }
 
   } else {
     ctx.fillStyle = '#aaaacc';
-    ctx.font = '16px Arial';
-    ctx.fillText(`Score: ${score} / ${total}`, PAD_X, 32);
+    ctx.font = '15px Arial';
+    ctx.fillText(`Score: ${score} / ${total}`, PAD_X, 30);
+
+    if (currentTempo < 1.0) {
+      ctx.fillStyle = '#5096ff';
+      ctx.font = '12px Arial';
+      ctx.fillText(`${Math.round(currentTempo * 100)}% tốc độ`, PAD_X, 50);
+    }
   }
 
   requestAnimationFrame(render);

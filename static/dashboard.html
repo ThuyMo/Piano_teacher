@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Piano Teacher</title>
+  <title>montt · Piano Teacher</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -17,21 +17,44 @@
     h1 { font-size: 26px; color: #ffffff; margin-bottom: 6px; }
     .subtitle { color: #44445a; font-size: 14px; margin-bottom: 40px; }
 
-    /* ── Upload card ── */
+    /* ── Input cards ── */
+    .song-card,
     .upload-card {
       background: #12121a;
-      border: 2px dashed #252535;
       border-radius: 12px;
       padding: 40px;
       text-align: center;
-      cursor: pointer;
-      transition: border-color 0.15s;
       margin-bottom: 20px;
     }
+    .song-card {
+      border: 1px solid #252535;
+      padding: 28px;
+    }
+    .upload-card {
+      border: 2px dashed #252535;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
     .upload-card:hover, .upload-card.dragover { border-color: #5096ff; }
-    .upload-icon { font-size: 40px; margin-bottom: 14px; }
-    .upload-card h2 { font-size: 17px; color: #eeeeff; margin-bottom: 6px; }
-    .upload-card p  { font-size: 13px; color: #44445a; margin-bottom: 22px; }
+    .upload-icon, .song-icon { font-size: 40px; margin-bottom: 14px; }
+    .song-card h2, .upload-card h2 { font-size: 17px; color: #eeeeff; margin-bottom: 6px; }
+    .song-card p, .upload-card p  { font-size: 13px; color: #44445a; margin-bottom: 22px; }
+    .song-form {
+      display: flex;
+      gap: 10px;
+    }
+    #songInput {
+      flex: 1;
+      min-width: 0;
+      background: #0a0a12;
+      color: #eeeeff;
+      border: 1px solid #252535;
+      border-radius: 6px;
+      padding: 11px 12px;
+      font-size: 14px;
+      outline: none;
+    }
+    #songInput:focus { border-color: #5096ff; }
     #fileInput { display: none; }
     .btn {
       background: #5096ff;
@@ -126,7 +149,18 @@
 <body>
 <div class="container">
   <h1>🎹 Piano Teacher</h1>
-  <p class="subtitle">Upload an audio recording to generate a playable piano game</p>
+  <p class="subtitle">by <strong style="color:#5096ff;letter-spacing:.5px">montt</strong> &nbsp;·&nbsp; Tải nhạc, luyện đàn, nhận nhận xét từ AI</p>
+
+  <!-- Public song search -->
+  <div class="song-card">
+    <div class="song-icon">🔎</div>
+    <h2>Search &amp; Download</h2>
+    <p>Nhập tên bài hoặc link YouTube để tải và chơi</p>
+    <form class="song-form" id="songForm">
+      <input id="songInput" type="text" placeholder="Tên bài hoặc link YouTube…" autocomplete="off" />
+      <button class="btn" type="submit">Download</button>
+    </form>
+  </div>
 
   <!-- Upload -->
   <div class="upload-card" id="dropZone">
@@ -154,6 +188,8 @@
 <script>
 const dropZone   = document.getElementById('dropZone');
 const fileInput  = document.getElementById('fileInput');
+const songForm   = document.getElementById('songForm');
+const songInput  = document.getElementById('songInput');
 const statusEl   = document.getElementById('status');
 const statusText = document.getElementById('statusText');
 const spinner    = document.getElementById('spinner');
@@ -211,7 +247,7 @@ async function processFile(file) {
   const { task_id } = await fetch('/upload', { method: 'POST', body: form }).then(r => r.json());
 
   while (true) {
-    await new Promise(r => setTimeout(r, 2500));
+    await new Promise(r => setTimeout(r, 1000));
     const s = await fetch(`/status/${task_id}`).then(r => r.json());
 
     if (s.step && s.status === 'processing') {
@@ -231,6 +267,49 @@ async function processFile(file) {
     }
   }
 }
+
+async function processSong(query) {
+  showStatus(`Searching for ${query}…`);
+
+  const response = await fetch('/download-song', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    showStatus(`Error: ${payload.error || 'Could not start download'}`, 'err');
+    return;
+  }
+
+  const { task_id } = payload;
+  while (true) {
+    await new Promise(r => setTimeout(r, 1000));
+    const s = await fetch(`/status/${task_id}`).then(r => r.json());
+
+    if (s.step && s.status === 'processing') {
+      showStatus(s.step);
+    }
+    if (s.status === 'done') {
+      showStatus(
+        `✓ ${s.file}  ·  Key: ${s.key}  ·  ${s.notes} notes  ·  avg. ${s.median_duration}s/note`,
+        'ok', s.file
+      );
+      loadFiles();
+      break;
+    }
+    if (s.status === 'error') {
+      showStatus(`Error: ${s.error}`, 'err');
+      break;
+    }
+  }
+}
+
+songForm.addEventListener('submit', e => {
+  e.preventDefault();
+  const query = songInput.value.trim();
+  if (query) processSong(query);
+});
 
 fileInput.addEventListener('change', e => {
   if (e.target.files[0]) processFile(e.target.files[0]);

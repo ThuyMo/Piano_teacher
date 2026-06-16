@@ -1,26 +1,61 @@
 """
 Piano Teacher – main web app.
-Usage: python app.py
-Then open http://localhost:8000
+Usage: python app.py  →  http://localhost:8000
 """
 import asyncio
+import base64
 import json
 import os
 import queue
+import re
+import tempfile
 import threading
 import uuid
 from pathlib import Path
 
 import mido
 import uvicorn
+import yt_dlp
+from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from openai import OpenAI
 from pydantic import BaseModel
 
 from model.input_processor import convert_audio_to_midi
 from model.midi_processor import extract_right_hand
 from model.helper import chord_detector, mid_to_pd
+
+load_dotenv()
+
+# ─── YouTube cookies (optional) ───────────────────────────────────────────────
+# Set YTDLP_COOKIES_B64 = base64(cookies.txt) to bypass YouTube bot detection
+# on cloud servers. If not set, yt-dlp runs without cookies (works on local).
+_YTDLP_COOKIES_FILE: str | None = None
+_ytdlp_cookies_b64 = os.getenv("YTDLP_COOKIES_B64", "").strip()
+if _ytdlp_cookies_b64:
+    try:
+        raw = base64.b64decode(_ytdlp_cookies_b64)
+        content = raw.decode("utf-8", errors="replace")
+        # Rebuild valid Netscape cookie file. Keep #HttpOnly_ cookie records;
+        # those are real Netscape cookie rows, not comments, and often carry
+        # YouTube/Google auth state.
+        lines = [
+            l for l in content.splitlines()
+            if l and (not l.startswith("#") or l.startswith("#HttpOnly_"))
+        ]
+        cookie_text = "# Netscape HTTP Cookie File\n" + "\n".join(lines) + "\n"
+        _tmp = tempfile.NamedTemporaryFile(
+            suffix=".txt", prefix="yt_cookies_", delete=False, mode="w"
+        )
+        _tmp.write(cookie_text)
+        _tmp.close()
+        _YTDLP_COOKIES_FILE = _tmp.name
+        print(f"[yt-dlp] cookies loaded: {len(lines)} entries → {_YTDLP_COOKIES_FILE}")
+    except Exception as _e:
+        print(f"[yt-dlp] cookies error (will run without): {_e}")
+        _YTDLP_COOKIES_FILE = None
 
 BASE_DIR     = Path(__file__).parent
 ARTIFACT_DIR = BASE_DIR / "artifact"
@@ -31,7 +66,111 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
-# ─── MIDI helpers (mirrors server.py, no side-effects) ────────────────────────
+# ─── LLM client (OpenAI-compatible) ──────────────────────────────────────────
+
+_llm_api_key  = os.getenv("LLM_API_KEY", "")
+_llm_base_url = os.getenv("LLM_BASE_URL", "")
+_llm_model    = os.getenv("LLM_MODEL", "")
+
+_llm: OpenAI | None = (
+    OpenAI(api_key=_llm_api_key, base_url=_llm_base_url)
+    if _llm_api_key and _llm_base_url else None
+)
+
+_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+
+
+def _pitch_name(pitch: int) -> str:
+    return f"{_NOTE_NAMES[pitch % 12]}{pitch // 12 - 1}"
+
+
+def _suggest_finger(target_pitch: int, group_pitches: list, hand: str) -> int:
+    """Return suggested finger (1–5) based on note position within the chord."""
+    sorted_p = sorted(set(group_pitches))
+    n = len(sorted_p)
+    if n == 0:
+        return 3
+    try:
+        idx = sorted_p.index(target_pitch)
+    except ValueError:
+        idx = min(range(n), key=lambda i: abs(sorted_p[i] - target_pitch))
+    if n == 1:
+        return 1 if hand == 'RH' else 5
+    ratio = idx / (n - 1)
+    # RH: thumb(1)=lowest pitch; LH: thumb(1)=highest pitch
+    return 1 + round(ratio * 4) if hand == 'RH' else 5 - round(ratio * 4)
+
+
+def _generate_ai_feedback(stats: dict) -> dict:
+    """Call LLM to produce session feedback. Runs in a thread."""
+    wrong_desc = ""
+    if stats.get('wrong_notes'):
+        details = []
+        for wn in stats['wrong_notes'][-5:]:
+            pressed       = _pitch_name(wn['pressed'])
+            required_names = [_pitch_name(p) for p in wn['required']]
+            details.append(f"chơi {pressed} nhưng cần {'+'.join(required_names)}")
+        wrong_desc = "; ".join(details)
+
+    lines = [
+        f'Bài: "{stats["song"]}" | Tay: {stats["hand"]} | Tốc độ: {int(stats["tempo"]*100)}%',
+        f'Chính xác: {stats["accuracy"]:.0%} ({stats["correct"]}/{stats["total"]}) | Sai: {stats["wrong_count"]} lần',
+    ]
+    if wrong_desc:
+        lines.append(f'Lỗi: {wrong_desc}')
+    lines.append(
+        '\nTrả về JSON object duy nhất (tất cả giá trị là string hoặc array of string):\n'
+        '{"feedback":"Câu nhận xét một đoạn ngắn khuyến khích học sinh.",'
+        '"next_practice":"Gợi ý luyện tập cụ thể một câu.",'
+        '"song_recommendations":["Tên bài 1","Tên bài 2","Tên bài 3"]}'
+    )
+    prompt = '\n'.join(lines)
+
+    resp = _llm.chat.completions.create(
+        model=_llm_model,
+        messages=[
+            {"role": "system", "content": "/no_thinking"},
+            {"role": "user",   "content": prompt},
+        ],
+        max_tokens=2048,
+        temperature=0.3,
+    )
+    msg = resp.choices[0].message
+    text = (msg.content or '').strip()
+    print(f"[llm] raw response ({len(text)} chars): {text[:200]}")
+
+    parsed: dict = {}
+    try:
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        parsed = json.loads(match.group() if match else text)
+    except Exception as e:
+        print(f"[llm] JSON parse failed: {e}, text={text[:300]!r}")
+        # Build fallback from raw text
+        parsed = {
+            "feedback": text or "Bài tập đã hoàn thành! Tiếp tục luyện tập để cải thiện.",
+            "next_practice": "Thử lại bài với tốc độ chậm hơn để chú ý từng nốt nhạc.",
+            "song_recommendations": ["Twinkle Twinkle Little Star", "Ode to Joy", "Happy Birthday"],
+        }
+
+    if isinstance(parsed.get('feedback'), list):
+        parsed['feedback'] = ' '.join(parsed['feedback'])
+    # Ensure all required keys exist
+    parsed.setdefault("feedback", "Bài tập đã hoàn thành!")
+    parsed.setdefault("next_practice", "Tiếp tục luyện tập đều đặn mỗi ngày.")
+    parsed.setdefault("song_recommendations", [])
+    return parsed
+
+
+# ─── MIDI helpers ─────────────────────────────────────────────────────────────
+
+def _file_exists(p: Path) -> bool:
+    """Workaround: os.stat fails on macOS Docker virtiofs for Unicode filenames.
+    listdir + open are unaffected."""
+    try:
+        return p.name in os.listdir(str(p.parent))
+    except Exception:
+        return False
+
 
 def _load_notes(path: str) -> list:
     mid = mido.MidiFile(path)
@@ -70,7 +209,7 @@ def _group_notes(notes: list, tol: float = 0.05) -> list:
     return groups
 
 
-# ─── Game state (single active game) ─────────────────────────────────────────
+# ─── Game state ───────────────────────────────────────────────────────────────
 
 notes_data   = []
 groups       = []
@@ -78,27 +217,343 @@ clients      = set()
 midi_q       = queue.Queue()
 active_notes = set()
 
-g_time   = 0.0
-g_status = 'PLAYING'
-g_idx    = 0
-g_score  = 0
-g_hit    = set()
+g_time             = 0.0
+g_status           = 'PLAYING'
+g_idx              = 0
+g_score            = 0
+g_hit              = set()
+
+# Teacher-agent extensions
+g_tempo             = 1.0        # playback speed multiplier (0.5 / 0.75 / 1.0)
+g_hand              = 'RH'       # 'RH' | 'LH' | 'BOTH'
+g_current_song      = ''         # base stem (without _RH/_LH)
+g_current_path      = ''         # full path of loaded MIDI
+g_wrong_notes       = []         # [{group_idx, pressed, required, time}]
+g_section_mistakes  = {}         # group_idx -> mistake count
+g_section_hit_times = {}         # group_idx -> reaction time (seconds)
+g_last_wrong        = None       # last wrong-note payload
+g_last_wrong_at     = -999.0     # loop wall-clock time of last wrong note
+g_wait_started_at   = 0.0        # loop wall-clock time when WAITING began
+
+# Pre-computed feedback (kicked off the moment game reaches FINISHED)
+g_feedback_cache: dict | None = None
+g_feedback_future: asyncio.Future | None = None
 
 
 def _reset_game(path: str) -> None:
     global notes_data, groups, g_time, g_status, g_idx, g_score, g_hit
-    notes_data = _load_notes(path)
-    groups     = _group_notes(notes_data)
-    g_time     = (groups[0]['time'] - 4.0) if groups else 0.0
-    g_status   = 'PLAYING'
-    g_idx      = 0
-    g_score    = 0
-    g_hit      = set()
+    global g_wrong_notes, g_section_mistakes, g_section_hit_times
+    global g_last_wrong, g_last_wrong_at, g_current_song, g_current_path
+    global g_wait_started_at, g_feedback_cache, g_feedback_future
+
+    g_current_path = path
+    notes_data     = _load_notes(path)
+    groups         = _group_notes(notes_data)
+    g_time         = (groups[0]['time'] - 4.0) if groups else 0.0
+    g_status       = 'PLAYING'
+    g_idx          = 0
+    g_score        = 0
+    g_hit          = set()
+    g_wrong_notes       = []
+    g_section_mistakes  = {}
+    g_section_hit_times = {}
+    g_last_wrong        = None
+    g_last_wrong_at     = -999.0
+    g_wait_started_at   = 0.0
+    g_feedback_cache    = None
+    g_feedback_future   = None
+
+    stem = Path(path).stem
+    for suffix in ('_RH', '_LH'):
+        if stem.endswith(suffix):
+            stem = stem[:-len(suffix)]
+            break
+    g_current_song = stem
 
 
 # ─── Background task tracking ────────────────────────────────────────────────
 
-tasks: dict = {}  # task_id -> {"status": ..., ...}
+tasks: dict       = {}
+_mp3_cache: dict  = {}
+
+
+def _safe_stem(value: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._ -]+", "", value).strip(" ._-")
+    stem = re.sub(r"\s+", " ", stem)
+    return stem[:80] or "downloaded-song"
+
+
+_YT_URL_RE = re.compile(
+    r'(?:youtube\.com/(?:watch\?.*?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})'
+)
+
+def _extract_video_id(query: str) -> str | None:
+    m = _YT_URL_RE.search(query)
+    return m.group(1) if m else None
+
+
+_YT_URL_RE = re.compile(
+    r'(?:youtube\.com/(?:watch\?.*?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})'
+)
+
+def _extract_video_id(query: str) -> str | None:
+    m = _YT_URL_RE.search(query)
+    return m.group(1) if m else None
+
+
+def _search_video_ids(song_name: str) -> list[str]:
+    """Search YouTube with yt-dlp (flat extract, works from datacenter IPs)."""
+    opts = {
+        "quiet": True, "no_warnings": True,
+        "extract_flat": True, "ignoreerrors": True,
+        "extractor_args": {"youtube": {"player_client": ["mweb", "android"]}},
+    }
+    if _YTDLP_COOKIES_FILE:
+        opts["cookiefile"] = _YTDLP_COOKIES_FILE
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        res = ydl.extract_info(f"ytsearch8:{song_name}", download=False)
+    entries = [e for e in (res or {}).get("entries", []) if e and e.get("id")]
+    # Filter: no live, no long videos
+    filtered = [
+        e for e in entries
+        if e.get("live_status") not in ("is_live", "is_upcoming")
+        and (e.get("duration") or 0) <= 720
+    ]
+    return [e["id"] for e in (filtered or entries)[:6]]
+
+
+def _soundcloud_download(song_name: str, output_path: Path, on_progress=None) -> str:
+    """Download from SoundCloud — không bị block datacenter IP, không cần cookies."""
+    def progress_hook(d):
+        if d["status"] == "downloading" and on_progress:
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            done  = d.get("downloaded_bytes", 0)
+            on_progress(done, total)
+
+    query = f"{song_name} piano"
+    opts: dict = {
+        "format":         "bestaudio/best",
+        "outtmpl":        str(output_path.with_suffix(".%(ext)s")),
+        "postprocessors": [{"key": "FFmpegExtractAudio",
+                            "preferredcodec": "mp3", "preferredquality": "128"}],
+        "quiet":          True,
+        "no_warnings":    True,
+        "ignoreerrors":   True,
+        "progress_hooks": [progress_hook],
+        "noplaylist":     True,
+    }
+    # scsearch5: tìm 5 kết quả trên SoundCloud và tải cái đầu tiên match
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"scsearch5:{query}", download=True)
+
+    # khi tìm playlist, info là dict với "entries"
+    if info and info.get("_type") == "playlist":
+        entries = [e for e in (info.get("entries") or []) if e]
+        info = entries[0] if entries else None
+
+    if info and output_path.with_suffix(".mp3").exists():
+        title = info.get("title", song_name)
+        print(f"[soundcloud] OK: {title}")
+        return title
+
+    raise RuntimeError(f"SoundCloud: không tìm thấy '{song_name}'")
+
+
+def _ytdlp_download(song_name: str, output_path: Path, on_progress=None) -> str:
+    """Fallback downloader using yt-dlp with tv_embedded client."""
+    def progress_hook(d):
+        if d["status"] == "downloading" and on_progress:
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            done  = d.get("downloaded_bytes", 0)
+            on_progress(done, total)
+
+    video_ids = _search_video_ids(song_name)
+    if not video_ids:
+        raise FileNotFoundError(f"Không tìm thấy video cho '{song_name}'")
+
+    last_err: Exception | None = None
+    for vid_id in video_ids:
+        url = f"https://www.youtube.com/watch?v={vid_id}"
+        for leftover in output_path.parent.glob(output_path.name + ".*"):
+            leftover.unlink(missing_ok=True)
+
+        # Try no-cookie mobile clients first, then cookie-backed web client
+        client_profiles: list[dict] = [
+            {"clients": ["mweb", "android"], "cookies": False},
+        ]
+        if _YTDLP_COOKIES_FILE:
+            client_profiles.append({"clients": ["web", "tv_embedded"], "cookies": True})
+
+        for prof in client_profiles:
+            opts: dict = {
+                "format": "bestaudio/best",
+                "outtmpl": str(output_path.with_suffix(".%(ext)s")),
+                "postprocessors": [{"key": "FFmpegExtractAudio",
+                                    "preferredcodec": "mp3", "preferredquality": "128"}],
+                "quiet": True, "no_warnings": True, "ignoreerrors": False,
+                "extractor_args": {"youtube": {"player_client": prof["clients"]}},
+                "progress_hooks": [progress_hook],
+            }
+            if prof["cookies"] and _YTDLP_COOKIES_FILE:
+                opts["cookiefile"] = _YTDLP_COOKIES_FILE
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                if info:
+                    return info.get("title", song_name)
+            except Exception as exc:
+                last_err = exc
+    raise RuntimeError(f"yt-dlp: không tải được '{song_name}'.\n[{last_err}]")
+
+
+def _download_youtube_url(video_id: str, output_path: Path, on_progress=None) -> str:
+    """Download a specific YouTube video by ID, trying pytubefix then yt-dlp."""
+    import subprocess
+    from pytubefix import YouTube
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+
+    try:
+        yt = YouTube(url, use_po_token=True)
+        stream = (
+            yt.streams.filter(only_audio=True).order_by("abr").desc().first()
+            or yt.streams.filter(progressive=True).first()
+        )
+        if stream:
+            ext = stream.subtype or "mp4"
+            raw_name = f"{output_path.stem}_raw.{ext}"
+            stream.download(output_path=str(output_path.parent), filename=raw_name)
+            raw_path = output_path.parent / raw_name
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(raw_path),
+                 "-vn", "-ar", "44100", "-ac", "2", "-b:a", "128k",
+                 str(output_path.with_suffix(".mp3"))],
+                capture_output=True, check=True,
+            )
+            raw_path.unlink(missing_ok=True)
+            print(f"[pytubefix] OK: {yt.title}")
+            return yt.title
+    except Exception as pyt_err:
+        print(f"[pytubefix] {video_id} failed: {pyt_err}")
+
+    def progress_hook(d):
+        if d["status"] == "downloading" and on_progress:
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            done  = d.get("downloaded_bytes", 0)
+            on_progress(done, total)
+
+    profiles = [{"clients": ["mweb", "android"], "cookies": False}]
+    if _YTDLP_COOKIES_FILE:
+        profiles.append({"clients": ["web", "tv_embedded"], "cookies": True})
+
+    last_err: Exception | None = None
+    for prof in profiles:
+        for leftover in output_path.parent.glob(output_path.name + ".*"):
+            leftover.unlink(missing_ok=True)
+        opts: dict = {
+            "format": "bestaudio/best",
+            "outtmpl": str(output_path.with_suffix(".%(ext)s")),
+            "postprocessors": [{"key": "FFmpegExtractAudio",
+                                "preferredcodec": "mp3", "preferredquality": "128"}],
+            "quiet": True, "no_warnings": True, "ignoreerrors": False,
+            "extractor_args": {"youtube": {"player_client": prof["clients"]}},
+            "progress_hooks": [progress_hook],
+        }
+        if prof["cookies"] and _YTDLP_COOKIES_FILE:
+            opts["cookiefile"] = _YTDLP_COOKIES_FILE
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+            if info:
+                return info.get("title", video_id)
+        except Exception as exc:
+            last_err = exc
+
+    raise RuntimeError(
+        f"Không thể tải video {video_id}. Thử upload file trực tiếp.\n[{last_err}]"
+    )
+
+
+def _youtube_title(video_id: str) -> str | None:
+    """Get video title via YouTube oEmbed (public API, no auth needed)."""
+    import urllib.request
+    try:
+        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        with urllib.request.urlopen(url, timeout=8) as r:
+            return json.loads(r.read()).get("title")
+    except Exception:
+        return None
+
+
+def _clean_search_title(title: str) -> str:
+    """Strip channel names / YouTube suffixes from video title for cleaner search."""
+    # Remove trailing parts after ' | ' that look like channel/uploader names
+    noise = re.compile(
+        r'\s*\|\s*[^|]*(?:youtube|official|channel|music|records|vevo|topic)[^|]*$',
+        re.IGNORECASE,
+    )
+    cleaned = noise.sub('', title).strip()
+    # If still has ' | ', take first two parts joined with space
+    parts = [p.strip() for p in cleaned.split('|') if p.strip()]
+    return ' '.join(parts[:2]) if parts else title
+
+
+def _download_song(song_name: str, output_path: Path, on_progress=None) -> str:
+    """Nhận tên bài HOẶC YouTube URL. URL → thử download thẳng → fallback SoundCloud."""
+    vid_id = _extract_video_id(song_name)
+    if vid_id:
+        # Thử download trực tiếp từ YouTube
+        try:
+            return _download_youtube_url(vid_id, output_path, on_progress)
+        except Exception as yt_err:
+            print(f"[download] YouTube direct failed ({yt_err}), trying SoundCloud with title...")
+        # Fallback: lấy title qua oEmbed → clean → search SoundCloud
+        raw_title = _youtube_title(vid_id) or song_name
+        title = _clean_search_title(raw_title)
+        print(f"[download] oEmbed title: {raw_title!r} → search: {title!r}")
+        try:
+            return _soundcloud_download(title, output_path, on_progress)
+        except Exception as sc_err:
+            raise RuntimeError(
+                f"Không thể tải '{title}'. Thử upload file trực tiếp.\n[{sc_err}]"
+            ) from sc_err
+
+    sc_err: Exception | None = None
+    try:
+        return _soundcloud_download(song_name, output_path, on_progress)
+    except Exception as e:
+        sc_err = e
+        print(f"[download] SoundCloud failed: {e}")
+    try:
+        return _ytdlp_download(song_name, output_path, on_progress)
+    except Exception as ytd_err:
+        raise RuntimeError(
+            f"Không thể tải '{song_name}'. Thử tên khác hoặc upload file trực tiếp.\n"
+            f"[SoundCloud: {sc_err}]\n[YouTube: {ytd_err}]"
+        ) from ytd_err
+
+
+async def _process_audio_task(task_id: str, input_path: Path) -> None:
+    try:
+        tasks[task_id]["step"] = "Đang nhận diện nốt nhạc (60s đầu)… ~20-40s"
+        midi_path = await asyncio.to_thread(convert_audio_to_midi, str(input_path))
+
+        tasks[task_id]["step"] = "Splitting hands..."
+        rh_path = await asyncio.to_thread(extract_right_hand, str(midi_path))
+
+        tasks[task_id]["step"] = "Analysing notes..."
+        tonic, mode = await asyncio.to_thread(chord_detector, str(rh_path))
+        df = await asyncio.to_thread(mid_to_pd, str(rh_path))
+
+        tasks[task_id] = {
+            "status": "done",
+            "file":   rh_path.name,
+            "key":    f"{tonic} {mode}",
+            "notes":  int(len(df)),
+            "median_duration": round(float(df['duration'].median()), 3),
+        }
+    except Exception as exc:
+        tasks[task_id] = {"status": "error", "error": str(exc)}
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -133,45 +588,177 @@ async def list_files():
 
 class LoadRequest(BaseModel):
     file: str
+    hand: str = 'RH'
+
+
+class SongRequest(BaseModel):
+    query: str
+
+
+class TempoRequest(BaseModel):
+    tempo: float   # 0.5 | 0.75 | 1.0
+
+
+class HandRequest(BaseModel):
+    hand: str      # 'RH' | 'LH' | 'BOTH'
 
 
 @app.post("/load")
 async def load_file(req: LoadRequest):
+    global g_hand
     path = ARTIFACT_DIR / req.file
-    if not path.exists():
+    if not _file_exists(path):
         return JSONResponse({"error": "File not found"}, status_code=404)
+    g_hand = req.hand
     _reset_game(str(path))
     return JSONResponse({"ok": True})
+
+
+@app.post("/set-tempo")
+async def set_tempo(req: TempoRequest):
+    global g_tempo
+    g_tempo = max(0.25, min(1.0, req.tempo))
+    return JSONResponse({"tempo": g_tempo})
+
+
+@app.post("/set-hand")
+async def set_hand_route(req: HandRequest):
+    global g_hand
+    if req.hand not in ('RH', 'LH', 'BOTH'):
+        return JSONResponse({"error": "Invalid hand"}, status_code=400)
+    if not g_current_song:
+        return JSONResponse({"error": "No song loaded"}, status_code=400)
+
+    g_hand = req.hand
+
+    if req.hand == 'RH':
+        candidates = [ARTIFACT_DIR / f"{g_current_song}_RH.mid",
+                      ARTIFACT_DIR / f"{g_current_song}.mid"]
+    elif req.hand == 'LH':
+        candidates = [ARTIFACT_DIR / f"{g_current_song}_LH.mid",
+                      ARTIFACT_DIR / f"{g_current_song}.mid"]
+    else:
+        candidates = [ARTIFACT_DIR / f"{g_current_song}.mid",
+                      ARTIFACT_DIR / f"{g_current_song}_RH.mid"]
+
+    for p in candidates:
+        if _file_exists(p):
+            _reset_game(str(p))
+            return JSONResponse({"ok": True, "file": p.name})
+
+    return JSONResponse({"error": "MIDI file not found for this hand"}, status_code=404)
+
+
+@app.post("/restart")
+async def restart_game():
+    if not g_current_path:
+        return JSONResponse({"error": "No song loaded"}, status_code=400)
+    _reset_game(g_current_path)
+    return JSONResponse({"ok": True})
+
+
+def _build_stats() -> dict:
+    total     = len(groups)
+    correct   = g_score
+    wrong_cnt = len(g_wrong_notes)
+    accuracy  = correct / total if total else 0.0
+    hard      = sorted(g_section_mistakes.items(), key=lambda x: x[1], reverse=True)[:3]
+    hard_times = [round(groups[i]['time'], 2) for i, _ in hard if i < len(groups)]
+    timings   = list(g_section_hit_times.values())
+    avg_react = round(sum(timings) / len(timings), 3) if timings else 0.0
+    return {
+        'song':              g_current_song,
+        'hand':              g_hand,
+        'tempo':             g_tempo,
+        'total':             total,
+        'correct':           correct,
+        'accuracy':          accuracy,
+        'wrong_count':       wrong_cnt,
+        'wrong_notes':       g_wrong_notes[-10:],
+        'hard_section_times': hard_times,
+        'avg_reaction_time': avg_react,
+    }
+
+
+def _start_feedback_precompute() -> None:
+    """Kick off LLM feedback computation the moment game finishes (non-blocking)."""
+    global g_feedback_cache, g_feedback_future
+    if not _llm or g_feedback_future is not None:
+        return
+    stats = _build_stats()
+    loop  = asyncio.get_event_loop()
+    g_feedback_future = loop.run_in_executor(None, _generate_ai_feedback, stats)
+
+
+@app.get("/session-feedback")
+async def session_feedback():
+    global g_feedback_cache, g_feedback_future
+
+    if not groups:
+        return JSONResponse({"error": "No song loaded"}, status_code=400)
+
+    stats = _build_stats()
+
+    ai = None
+    if _llm:
+        # Use pre-computed result if available, else compute now
+        if g_feedback_cache is not None:
+            ai = g_feedback_cache
+        else:
+            if g_feedback_future is None:
+                _start_feedback_precompute()
+            try:
+                ai = await asyncio.wrap_future(g_feedback_future)
+                g_feedback_cache = ai
+            except Exception as exc:
+                ai = {"error": str(exc)}
+
+    return JSONResponse({**stats, 'ai_feedback': ai})
 
 
 @app.post("/upload")
 async def upload_audio(file: UploadFile = File(...)):
     task_id = str(uuid.uuid4())[:8]
     tasks[task_id] = {"status": "processing", "step": "Uploading..."}
-
-    content = await file.read()
+    content    = await file.read()
     input_path = UPLOADS_DIR / file.filename
     input_path.write_bytes(content)
+    asyncio.create_task(_process_audio_task(task_id, input_path))
+    return JSONResponse({"task_id": task_id})
+
+
+@app.post("/download-song")
+async def download_song(req: SongRequest):
+    query = req.query.strip()
+    if not query:
+        return JSONResponse({"error": "Song name is required"}, status_code=400)
+
+    task_id = str(uuid.uuid4())[:8]
+    tasks[task_id] = {"status": "processing", "step": "Searching YouTube…"}
 
     async def pipeline():
         try:
-            tasks[task_id]["step"] = "Converting audio to MIDI (ffmpeg + transkun)..."
-            midi_path = await asyncio.to_thread(convert_audio_to_midi, str(input_path))
+            vid_id = _extract_video_id(query)
+            cache_key = vid_id if vid_id else query.lower().strip()
+            if cache_key in _mp3_cache and _file_exists(_mp3_cache[cache_key]):
+                input_path = _mp3_cache[cache_key]
+                tasks[task_id]["step"] = f"Cached: {input_path.stem}"
+            else:
+                _mp3_cache.pop(cache_key, None)
+                stem_path = UPLOADS_DIR / (vid_id if vid_id else _safe_stem(query))
 
-            tasks[task_id]["step"] = "Splitting hands..."
-            rh_path = await asyncio.to_thread(extract_right_hand, str(midi_path))
+                def on_progress(done, total):
+                    if total:
+                        tasks[task_id]["step"] = f"Downloading… {int(done*100/total)}%"
+                    else:
+                        tasks[task_id]["step"] = f"Downloading… {done/(1024*1024):.1f} MB"
 
-            tasks[task_id]["step"] = "Analysing notes..."
-            tonic, mode = await asyncio.to_thread(chord_detector, str(rh_path))
-            df = await asyncio.to_thread(mid_to_pd, str(rh_path))
+                tasks[task_id]["step"] = "Downloading from YouTube…" if vid_id else "Searching & downloading…"
+                await asyncio.to_thread(_download_song, query, stem_path, on_progress)
+                input_path = stem_path.with_suffix(".mp3")
+                _mp3_cache[cache_key] = input_path
 
-            tasks[task_id] = {
-                "status": "done",
-                "file":   rh_path.name,
-                "key":    f"{tonic} {mode}",
-                "notes":  int(len(df)),
-                "median_duration": round(float(df['duration'].median()), 3),
-            }
+            await _process_audio_task(task_id, input_path)
         except Exception as exc:
             tasks[task_id] = {"status": "error", "error": str(exc)}
 
@@ -197,14 +784,13 @@ async def ws_handler(websocket: WebSocket):
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-
             if msg.get("type") == "midi":
-                event_type = msg.get("event")
-                note = int(msg.get("note"))
+                note     = int(msg.get("note"))
                 velocity = int(msg.get("velocity", 0))
-                if event_type == "note_on" and velocity > 0:
+                event    = msg.get("event")
+                if event == "note_on" and velocity > 0:
                     midi_q.put(mido.Message("note_on", note=note, velocity=velocity))
-                elif event_type in {"note_off", "note_on"}:
+                elif event in {"note_off", "note_on"}:
                     midi_q.put(mido.Message("note_off", note=note, velocity=0))
     except WebSocketDisconnect:
         pass
@@ -216,14 +802,17 @@ async def ws_handler(websocket: WebSocket):
 
 async def game_loop():
     global g_time, g_status, g_idx, g_score, g_hit
+    global g_last_wrong, g_last_wrong_at, g_wait_started_at
+
     last = asyncio.get_event_loop().time()
 
     while True:
         await asyncio.sleep(1 / 30)
-        now = asyncio.get_event_loop().time()
-        dt  = now - last
+        now  = asyncio.get_event_loop().time()
+        dt   = now - last
         last = now
 
+        # Drain MIDI queue
         new_presses = []
         while True:
             try:
@@ -236,41 +825,85 @@ async def game_loop():
             except queue.Empty:
                 break
 
+        # ── State machine ──────────────────────────────────────────────────────
         if g_status == 'PLAYING':
-            g_time += dt
+            g_time += dt * g_tempo          # tempo scaling
             if g_idx >= len(groups):
                 g_status = 'FINISHED'
+                _start_feedback_precompute()
             elif g_time >= groups[g_idx]['time']:
-                g_time   = groups[g_idx]['time']
-                g_status = 'WAITING'
-                g_hit    = set()
+                g_time          = groups[g_idx]['time']
+                g_status        = 'WAITING'
+                g_hit           = set()
+                g_wait_started_at = now
 
         elif g_status == 'WAITING':
             required = {n['pitch'] for n in groups[g_idx]['notes']}
+            group_pitches = [n['pitch'] for n in groups[g_idx]['notes']]
+
             for p in new_presses:
                 if p in required:
                     g_hit.add(p)
+                else:
+                    # ── Wrong note detected ────────────────────────────────────
+                    g_section_mistakes[g_idx] = g_section_mistakes.get(g_idx, 0) + 1
+
+                    # Suggest finger for the first still-needed correct note
+                    still_needed = list(required - g_hit)
+                    target = min(still_needed) if still_needed else (min(required) if required else p)
+                    finger = _suggest_finger(target, group_pitches, g_hand)
+
+                    g_last_wrong = {
+                        'pressed':  p,
+                        'required': list(required),
+                        'finger':   finger,
+                        'hand':     g_hand,
+                    }
+                    g_last_wrong_at = now
+                    g_wrong_notes.append({
+                        **g_last_wrong,
+                        'group_idx': g_idx,
+                        'time':      g_time,
+                    })
+
             if g_hit >= required:
+                # Track reaction time for this group
+                g_section_hit_times[g_idx] = round(now - g_wait_started_at, 3)
                 g_score  += 1
                 g_idx    += 1
-                g_status  = 'PLAYING' if g_idx < len(groups) else 'FINISHED'
+                if g_idx < len(groups):
+                    g_status = 'PLAYING'
+                else:
+                    g_status = 'FINISHED'
+                    _start_feedback_precompute()
 
+        # ── Build payload ──────────────────────────────────────────────────────
         wait_pitches = (
             [n['pitch'] for n in groups[g_idx]['notes']]
             if g_status == 'WAITING' and g_idx < len(groups) else []
         )
+        cur_mistakes = g_section_mistakes.get(g_idx, 0) if g_idx < len(groups) else 0
+
+        show_wrong = (now - g_last_wrong_at) < 2.0
+
+        payload = json.dumps({
+            'type':             'state',
+            'game_time':        g_time,
+            'status':           g_status,
+            'score':            g_score,
+            'total':            len(groups),
+            'active_notes':     list(active_notes),
+            'wait_pitches':     wait_pitches,
+            'hit_pitches':      list(g_hit),
+            # Teacher extensions
+            'wrong_note':       g_last_wrong if show_wrong else None,
+            'section_mistakes': cur_mistakes,
+            'suggest_slow':     cur_mistakes >= 3 and g_status == 'WAITING',
+            'tempo':            g_tempo,
+            'hand':             g_hand,
+        })
 
         if clients:
-            payload = json.dumps({
-                'type':         'state',
-                'game_time':    g_time,
-                'status':       g_status,
-                'score':        g_score,
-                'total':        len(groups),
-                'active_notes': list(active_notes),
-                'wait_pitches': wait_pitches,
-                'hit_pitches':  list(g_hit),
-            })
             dead = set()
             for ws in list(clients):
                 try:
@@ -280,14 +913,16 @@ async def game_loop():
             clients.difference_update(dead)
 
 
+# ─── Physical MIDI listener ───────────────────────────────────────────────────
+
 def _midi_listener():
     try:
         ports = mido.get_input_names()
     except Exception as exc:
-        print(f"MIDI input unavailable — keyboard input disabled: {exc}")
+        print(f"MIDI input unavailable: {exc}")
         return
     if not ports:
-        print("No MIDI device found — keyboard input disabled.")
+        print("No MIDI device found.")
         return
     print(f"MIDI controller: {ports[0]}")
     with mido.open_input(ports[0]) as port:

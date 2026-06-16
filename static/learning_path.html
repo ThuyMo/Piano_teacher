@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Learning Path</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&family=Lato:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: linear-gradient(135deg, #fff8f5 0%, #f5f0ff 50%, #f0f8ff 100%);
+      background-attachment: fixed;
+      color: #2d2040;
+      font-family: 'Lato', sans-serif;
+      min-height: 100vh;
+      padding: 48px 20px 80px;
+    }
+    body::before {
+      content: '𝄞';
+      position: fixed;
+      bottom: -40px; right: 30px;
+      font-size: 340px;
+      color: rgba(160,110,220,0.06);
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .container { max-width: 760px; margin: 0 auto; position: relative; }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-style: italic;
+      font-size: 13px;
+      color: #9580b0;
+      text-decoration: none;
+      margin-bottom: 28px;
+      transition: color 0.15s;
+    }
+    .back-link:hover { color: #6c3fc5; }
+
+    .song-title {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 30px;
+      color: #2d2040;
+      margin-bottom: 4px;
+    }
+    .song-meta {
+      font-style: italic;
+      color: #9580b0;
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+
+    /* ── Progress bar ── */
+    .progress-section { margin-bottom: 36px; }
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 10px;
+    }
+    .progress-label {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 15px;
+      color: #6c3fc5;
+    }
+    .progress-pct { font-style: italic; font-size: 13px; color: #9580b0; }
+    .progress-track {
+      height: 10px;
+      background: rgba(180,150,220,0.18);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #8b5cf6, #ec4899, #f472b6);
+      border-radius: 99px;
+      transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+      width: 0%;
+    }
+
+    .section-label {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 13px;
+      letter-spacing: 1px;
+      color: #b0a0c8;
+      margin-bottom: 16px;
+    }
+
+    /* ── Cards grid ── */
+    .pieces-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .piece-card {
+      border-radius: 16px;
+      padding: 20px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: all 0.24s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .piece-card:hover { transform: translateY(-4px); }
+
+    .piece-card:nth-child(5n+1) { background: linear-gradient(135deg,#fdf4ff,#ede9fe); border:1px solid #ddd6fe; box-shadow:0 3px 14px rgba(167,139,250,.13); }
+    .piece-card:nth-child(5n+1):hover { box-shadow:0 10px 32px rgba(167,139,250,.26); }
+    .piece-card:nth-child(5n+2) { background: linear-gradient(135deg,#fff0f6,#fce7f3); border:1px solid #fbcfe8; box-shadow:0 3px 14px rgba(236,72,153,.11); }
+    .piece-card:nth-child(5n+2):hover { box-shadow:0 10px 32px rgba(236,72,153,.23); }
+    .piece-card:nth-child(5n+3) { background: linear-gradient(135deg,#f0fdfa,#d1fae5); border:1px solid #99f6e4; box-shadow:0 3px 14px rgba(20,184,166,.11); }
+    .piece-card:nth-child(5n+3):hover { box-shadow:0 10px 32px rgba(20,184,166,.23); }
+    .piece-card:nth-child(5n+4) { background: linear-gradient(135deg,#fff7ed,#ffedd5); border:1px solid #fed7aa; box-shadow:0 3px 14px rgba(249,115,22,.11); }
+    .piece-card:nth-child(5n+4):hover { box-shadow:0 10px 32px rgba(249,115,22,.22); }
+    .piece-card:nth-child(5n+5) { background: linear-gradient(135deg,#eff6ff,#dbeafe); border:1px solid #bfdbfe; box-shadow:0 3px 14px rgba(59,130,246,.11); }
+    .piece-card:nth-child(5n+5):hover { box-shadow:0 10px 32px rgba(59,130,246,.22); }
+
+    .piece-card.completed {
+      background: linear-gradient(135deg,#f0fdf4,#dcfce7) !important;
+      border-color: #86efac !important;
+      box-shadow: 0 3px 14px rgba(34,197,94,.13) !important;
+    }
+    .piece-card.completed:hover { box-shadow: 0 10px 32px rgba(34,197,94,.26) !important; }
+
+    .card-top { display: flex; align-items: flex-start; justify-content: space-between; }
+    .part-number {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 38px;
+      font-weight: 700;
+      line-height: 1;
+      color: rgba(45,32,64,.18);
+    }
+    .piece-card.completed .part-number { color: rgba(22,163,74,.25); }
+
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: 99px;
+      font-size: 11px; font-style: italic; font-weight: 700;
+    }
+    .badge-done { background:#dcfce7; color:#16a34a; border:1px solid #86efac; }
+    .badge-next { background:#ede9fe; color:#7c3aed; border:1px solid #c4b5fd; }
+    .badge-open { background:rgba(255,255,255,.55); color:#9580b0; border:1px solid rgba(180,150,220,.25); }
+
+    .piece-label {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 18px;
+      color: #2d2040;
+    }
+    .piece-meta { font-style: italic; font-size: 12px; color: #9580b0; margin-top: 2px; }
+
+    .btn-play-piece {
+      align-self: flex-start;
+      background: rgba(255,255,255,.7);
+      color: #6c3fc5;
+      border: 1.5px solid rgba(139,92,246,.3);
+      padding: 8px 20px;
+      border-radius: 10px;
+      font-family: 'Lato', sans-serif;
+      font-style: italic; font-weight: 700; font-size: 13px;
+      cursor: pointer; transition: all 0.2s;
+      backdrop-filter: blur(4px);
+    }
+    .btn-play-piece:hover {
+      background: linear-gradient(135deg,#8b5cf6,#a855f7);
+      color: #fff; border-color: transparent;
+      box-shadow: 0 4px 16px rgba(139,92,246,.35);
+      transform: scale(1.04);
+    }
+    .btn-play-piece:disabled { opacity: 0.6; cursor: default; transform: none; }
+    .piece-card.completed .btn-play-piece { color:#16a34a; border-color:rgba(34,197,94,.3); }
+    .piece-card.completed .btn-play-piece:hover {
+      background: linear-gradient(135deg,#22c55e,#16a34a);
+      color:#fff; border-color:transparent;
+      box-shadow: 0 4px 16px rgba(34,197,94,.35);
+    }
+
+    .tick {
+      position: absolute; bottom: 16px; right: 18px;
+      font-size: 28px; opacity: .22; pointer-events: none;
+    }
+
+    .loading-msg {
+      text-align: center; font-style: italic;
+      color: #b0a0c8; padding: 48px; font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <a class="back-link" href="/">← Back to Dashboard</a>
+
+  <div class="song-title" id="songTitle">Loading…</div>
+  <div class="song-meta"  id="songMeta"></div>
+
+  <div class="progress-section">
+    <div class="progress-header">
+      <span class="progress-label">Your Progress</span>
+      <span class="progress-pct" id="progressPct">—</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+  </div>
+
+  <div class="section-label" id="sectionLabel">♩ Song Parts</div>
+  <div class="pieces-grid" id="piecesGrid">
+    <div class="loading-msg">Loading pieces…</div>
+  </div>
+</div>
+
+<script>
+const params   = new URLSearchParams(location.search);
+const fileName = params.get('file') || '';
+const STORE_KEY = `piano_progress_${fileName}`;
+
+function getCompleted() {
+  try { return new Set(JSON.parse(localStorage.getItem(STORE_KEY) || '[]')); }
+  catch { return new Set(); }
+}
+
+function fmtTitle(name) {
+  return name
+    .replace(/_processed\.mid$/i, '')
+    .replace(/_transposed/gi, '')
+    .replace(/_RH/gi, ' ')
+    .replace(/_/g, ' ')
+    .trim()
+    .replace(/\b\w/g, c => c.toUpperCase()) || name;
+}
+
+function fmtDur(s) {
+  if (s == null) return '';
+  return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+}
+
+function renderPieces(pieces) {
+  const completed = getCompleted();
+  const doneCount = pieces.filter(p => completed.has(p.index)).length;
+  const pct = pieces.length ? Math.round((doneCount / pieces.length) * 100) : 0;
+
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressPct').textContent  = `${doneCount} of ${pieces.length} parts completed`;
+  document.getElementById('sectionLabel').textContent = `♩ ${pieces.length} Parts`;
+  document.getElementById('songMeta').textContent     = `${pieces.length} parts · ${pct}% complete`;
+
+  const nextIndex = pieces.find(p => !completed.has(p.index))?.index ?? -1;
+
+  document.getElementById('piecesGrid').innerHTML = pieces.map(p => {
+    const isDone  = completed.has(p.index);
+    const isNext  = !isDone && p.index === nextIndex;
+    const badgeCls = isDone ? 'badge-done' : isNext ? 'badge-next' : 'badge-open';
+    const badgeTxt = isDone ? '✓ Complete'  : isNext ? '▸ Up next'  : '○ Not started';
+    const cardCls  = isDone ? 'piece-card completed' : 'piece-card';
+    const playTxt  = isDone ? '↺ Replay' : '▶ Play';
+
+    return `
+      <div class="${cardCls}" id="card-${p.index}">
+        <div class="card-top">
+          <span class="part-number">${p.index + 1}</span>
+          <span class="status-badge ${badgeCls}">${badgeTxt}</span>
+        </div>
+        <div>
+          <div class="piece-label">${p.label}</div>
+          <div class="piece-meta">${p.note_groups} note groups${p.duration ? ' · ~' + fmtDur(p.duration) : ''}</div>
+        </div>
+        <button class="btn-play-piece"
+                onclick="playPiece(${p.index}, ${pieces.length})">
+          ${playTxt}
+        </button>
+        ${isDone ? '<div class="tick">✓</div>' : ''}
+      </div>`;
+  }).join('');
+}
+
+async function playPiece(pieceIndex, totalPieces) {
+  const btn = document.querySelector(`#card-${pieceIndex} .btn-play-piece`);
+  if (btn) { btn.textContent = '⏳ Loading…'; btn.disabled = true; }
+  try {
+    const res  = await fetch('/api/load_piece', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: fileName, piece_index: pieceIndex, total_pieces: totalPieces }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const ret = encodeURIComponent(`/learning_path?file=${encodeURIComponent(fileName)}`);
+    window.location.href = `/game?file=${encodeURIComponent(fileName)}&piece=${pieceIndex}&total=${totalPieces}&return=${ret}`;
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+    if (btn) { btn.textContent = '▶ Play'; btn.disabled = false; }
+  }
+}
+
+async function init() {
+  if (!fileName) {
+    document.getElementById('piecesGrid').innerHTML =
+      '<div class="loading-msg">No file specified. <a href="/">Go back</a>.</div>';
+    return;
+  }
+  document.getElementById('songTitle').textContent = fmtTitle(fileName);
+  try {
+    const { pieces, error } = await fetch(`/api/pieces?file=${encodeURIComponent(fileName)}`).then(r => r.json());
+    if (error) throw new Error(error);
+    renderPieces(pieces);
+  } catch (e) {
+    document.getElementById('piecesGrid').innerHTML =
+      `<div class="loading-msg">Error: ${e.message}</div>`;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

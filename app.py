@@ -8,6 +8,7 @@ import json
 import os
 import queue
 import re
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -25,7 +26,7 @@ from pydantic import BaseModel
 
 from model.input_processor import convert_audio_to_midi
 from model.midi_processor import extract_right_hand
-from model.helper import chord_detector, mid_to_pd
+from model.helper import chord_detector, mid_to_pd, pd_to_str, str_to_mid, transpose
 
 load_dotenv()
 
@@ -269,6 +270,54 @@ def _reset_game(path: str) -> None:
             stem = stem[:-len(suffix)]
             break
     g_current_song = stem
+
+
+# ─── yt-dlp helpers ───────────────────────────────────────────────────────────
+
+def _yt_search(query: str) -> list:
+    result = subprocess.run(
+        ["yt-dlp", f"ytsearch5:{query} piano",
+         "--dump-json", "--flat-playlist", "--quiet", "--no-warnings"],
+        capture_output=True, text=True, timeout=30
+    )
+    entries = []
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            video_id = data.get("id", "")
+            if not video_id:
+                continue
+            entries.append({
+                "id": video_id,
+                "title": data.get("title", "Unknown"),
+                "duration": data.get("duration"),
+                "channel": data.get("channel") or data.get("uploader", ""),
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+            })
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return entries
+
+
+def _download_preview(video_id: str, output_path: str) -> None:
+    subprocess.run(
+        ["yt-dlp", f"https://www.youtube.com/watch?v={video_id}",
+         "--download-sections", "*0-30",
+         "-x", "--audio-format", "mp3",
+         "-o", output_path, "--quiet", "--no-warnings"],
+        check=True, timeout=60
+    )
+
+
+def _download_audio(url: str, output_path: str) -> None:
+    subprocess.run(
+        ["yt-dlp", url, "-x", "--audio-format", "mp3",
+         "-o", output_path, "--quiet", "--no-warnings"],
+        check=True, timeout=300
+    )
 
 
 # ─── Background task tracking ────────────────────────────────────────────────
@@ -573,6 +622,11 @@ async def game_page():
     return FileResponse(BASE_DIR / "static" / "index.html")
 
 
+@app.get("/learning_path")
+async def learning_path_page():
+    return FileResponse(BASE_DIR / "static" / "learning_path.html")
+
+
 @app.get("/notes")
 async def get_notes():
     return JSONResponse({"notes": notes_data, "total": len(groups)})
@@ -602,6 +656,15 @@ class TempoRequest(BaseModel):
 class HandRequest(BaseModel):
     hand: str      # 'RH' | 'LH' | 'BOTH'
 
+class DownloadRequest(BaseModel):
+    url: str
+    title: str = ""
+
+class LoadPieceRequest(BaseModel):
+    file: str
+    piece_index: int
+    total_pieces: int
+
 
 @app.post("/load")
 async def load_file(req: LoadRequest):
@@ -614,6 +677,38 @@ async def load_file(req: LoadRequest):
     return JSONResponse({"ok": True})
 
 
+async def _run_pipeline(input_path: Path, task_id: str) -> None:
+    try:
+        tasks[task_id]["step"] = "Converting audio to MIDI (ffmpeg + transkun)..."
+        midi_path = await asyncio.to_thread(convert_audio_to_midi, str(input_path))
+
+        tasks[task_id]["step"] = "Splitting hands..."
+        rh_path = await asyncio.to_thread(extract_right_hand, str(midi_path))
+
+        tasks[task_id]["step"] = "Detecting key and transposing..."
+        tonic, mode = await asyncio.to_thread(chord_detector, str(rh_path))
+        target = "Am" if mode == "minor" else "C"
+        transposed_path = await asyncio.to_thread(
+            transpose, str(rh_path), target,
+            str(ARTIFACT_DIR / (rh_path.stem + "_transposed.mid"))
+        )
+
+        tasks[task_id]["step"] = "Processing notes for beginner..."
+        df = await asyncio.to_thread(mid_to_pd, str(transposed_path))
+        processed_df = df.loc[df.groupby('grouped_time')['pitch'].idxmax()].reset_index(drop=True)
+        processed_str = pd_to_str(processed_df)
+        processed_path = ARTIFACT_DIR / (rh_path.stem + "_processed.mid")
+        await asyncio.to_thread(str_to_mid, processed_str, str(processed_path))
+
+        tasks[task_id] = {
+            "status": "done",
+            "file":   processed_path.name,
+            "key":    f"{tonic} {mode}",
+            "notes":  int(len(processed_df)),
+            "median_duration": round(float(processed_df['duration'].median()), 3),
+        }
+    except Exception as exc:
+        tasks[task_id] = {"status": "error", "error": str(exc)}
 @app.post("/set-tempo")
 async def set_tempo(req: TempoRequest):
     global g_tempo
@@ -769,6 +864,120 @@ async def download_song(req: SongRequest):
 @app.get("/status/{task_id}")
 async def task_status(task_id: str):
     return JSONResponse(tasks.get(task_id, {"status": "unknown"}))
+
+
+@app.get("/api/search")
+async def search_youtube(q: str):
+    try:
+        results = await asyncio.to_thread(_yt_search, q)
+        return JSONResponse({"results": results})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/api/preview/{video_id}")
+async def preview_audio(video_id: str):
+    if not re.match(r'^[A-Za-z0-9_-]{11}$', video_id):
+        return JSONResponse({"error": "Invalid video ID"}, status_code=400)
+    cache_path = UPLOADS_DIR / f"preview_{video_id}.mp3"
+    if not cache_path.exists():
+        try:
+            await asyncio.to_thread(_download_preview, video_id, str(cache_path))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+    return FileResponse(str(cache_path), media_type="audio/mpeg")
+
+
+@app.post("/api/download")
+async def download_youtube(req: DownloadRequest):
+    task_id = str(uuid.uuid4())[:8]
+    tasks[task_id] = {"status": "processing", "step": "Downloading from YouTube..."}
+
+    async def pipeline():
+        try:
+            safe_title = re.sub(r'[^\w\s-]', '', req.title)[:40].strip() or task_id
+            audio_path = UPLOADS_DIR / f"{safe_title}_{task_id}.mp3"
+            tasks[task_id]["step"] = "Downloading audio from YouTube..."
+            await asyncio.to_thread(_download_audio, req.url, str(audio_path))
+        except Exception as exc:
+            tasks[task_id] = {"status": "error", "error": str(exc)}
+            return
+        await _run_pipeline(audio_path, task_id)
+
+    asyncio.create_task(pipeline())
+    return JSONResponse({"task_id": task_id})
+
+
+def _compute_pieces(midi_path: str) -> list:
+    df = mid_to_pd(midi_path)
+    if df.empty:
+        return []
+    times = sorted(df['grouped_time'].unique())
+    n_groups = len(times)
+    n_pieces = max(2, min(10, round(n_groups / 20)))
+    chunk = max(1, n_groups // n_pieces)
+    pieces = []
+    for i in range(n_pieces):
+        start_idx = i * chunk
+        end_idx = (i + 1) * chunk if i < n_pieces - 1 else n_groups
+        if start_idx >= n_groups:
+            break
+        slice_times = times[start_idx:end_idx]
+        piece_df = df[df['grouped_time'].isin(set(slice_times))]
+        pieces.append({
+            "index": i,
+            "label": f"Part {i + 1}",
+            "note_groups": len(slice_times),
+            "notes": int(len(piece_df)),
+            "duration": round(float(slice_times[-1] - slice_times[0]), 1),
+            "start_time": round(float(slice_times[0]), 1),
+        })
+    return pieces
+
+
+def _extract_piece(midi_path: str, piece_index: int, total_pieces: int) -> Path:
+    df = mid_to_pd(midi_path)
+    times = sorted(df['grouped_time'].unique())
+    n_groups = len(times)
+    chunk = max(1, n_groups // total_pieces)
+    start_idx = piece_index * chunk
+    end_idx = (piece_index + 1) * chunk if piece_index < total_pieces - 1 else n_groups
+    slice_times = set(times[start_idx:end_idx])
+    piece_df = df[df['grouped_time'].isin(slice_times)].copy()
+    offset = float(piece_df['grouped_time'].min())
+    piece_df['grouped_time'] -= offset
+    piece_df['timestamp'] -= offset
+    piece_str = pd_to_str(piece_df)
+    piece_path = ARTIFACT_DIR / f"{Path(midi_path).stem}_piece{piece_index}.mid"
+    str_to_mid(piece_str, str(piece_path))
+    return piece_path
+
+
+@app.get("/api/pieces")
+async def get_pieces(file: str):
+    midi_path = ARTIFACT_DIR / file
+    if not midi_path.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    try:
+        pieces = await asyncio.to_thread(_compute_pieces, str(midi_path))
+        return JSONResponse({"pieces": pieces, "total": len(pieces)})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/load_piece")
+async def load_piece_route(req: LoadPieceRequest):
+    midi_path = ARTIFACT_DIR / req.file
+    if not midi_path.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    try:
+        piece_path = await asyncio.to_thread(
+            _extract_piece, str(midi_path), req.piece_index, req.total_pieces
+        )
+        _reset_game(str(piece_path))
+        return JSONResponse({"ok": True})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─── WebSocket ────────────────────────────────────────────────────────────────

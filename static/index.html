@@ -116,73 +116,66 @@
     /* ── Restart toast notification ──────────────────────────────────────── */
     #restartToast {
       position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%) scale(0.88);
+      top: 16px;
+      right: 16px;
+      transform: translateX(120%) scale(0.95);
       opacity: 0;
       pointer-events: none;
       z-index: 50;
       background: #1a1200;
       border: 1.5px solid #cc8800;
-      border-radius: 16px;
-      box-shadow: 0 8px 48px rgba(0,0,0,.7), 0 0 0 1px rgba(255,180,0,.08);
-      padding: 28px 32px 22px;
-      min-width: 320px;
-      max-width: 400px;
-      text-align: center;
-      transition: opacity .22s ease, transform .22s ease;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.6);
+      padding: 14px 18px 12px;
+      min-width: 240px;
+      max-width: 300px;
+      text-align: left;
+      transition: opacity .25s ease, transform .25s ease;
     }
     #restartToast.show {
       opacity: 1;
-      transform: translate(-50%, -50%) scale(1);
+      transform: translateX(0) scale(1);
       pointer-events: auto;
     }
-    .toast-icon   { font-size: 36px; margin-bottom: 10px; }
-    .toast-title  { color: #ffc832; font-size: 17px; font-weight: bold; margin-bottom: 6px; }
-    .toast-sub    { color: #886622; font-size: 13px; margin-bottom: 20px; }
-    .toast-btns   { display: flex; flex-direction: column; gap: 8px; }
+    .toast-icon   { font-size: 20px; display: inline; margin-right: 6px; }
+    .toast-title  { color: #ffc832; font-size: 14px; font-weight: bold; margin-bottom: 4px; display: inline; }
+    .toast-sub    { color: #886622; font-size: 12px; margin: 6px 0 10px; }
+    .toast-btns   { display: flex; flex-direction: column; gap: 6px; }
     .btn-toast-primary {
       background: #cc8800;
       color: #000;
       border: none;
-      border-radius: 8px;
-      padding: 10px 0;
-      font-size: 14px;
+      border-radius: 7px;
+      padding: 7px 10px;
+      font-size: 12px;
       font-weight: bold;
       cursor: pointer;
       transition: background .15s;
+      text-align: left;
     }
     .btn-toast-primary:hover { background: #ffaa00; }
     .btn-toast-secondary {
       background: #2a2000;
       color: #ffc832;
       border: 1px solid #554400;
-      border-radius: 8px;
-      padding: 9px 0;
-      font-size: 13px;
+      border-radius: 7px;
+      padding: 6px 10px;
+      font-size: 12px;
       cursor: pointer;
       transition: background .15s;
+      text-align: left;
     }
     .btn-toast-secondary:hover { background: #3a2e00; }
     .btn-toast-dismiss {
       background: none;
-      color: #443300;
+      color: #554400;
       border: none;
-      font-size: 12px;
+      font-size: 11px;
       cursor: pointer;
-      margin-top: 6px;
-      padding: 4px;
+      padding: 2px 0;
+      text-align: left;
     }
     .btn-toast-dismiss:hover { color: #887755; }
-    /* dim backdrop while toast is showing */
-    #toastBackdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,.45);
-      z-index: 49;
-      display: none;
-    }
-    #toastBackdrop.show { display: block; }
 
     /* ── Status row ───────────────────────────────────────────────────────── */
     .status-row {
@@ -391,9 +384,6 @@
       <div class="finger-num" id="fingerNum">—</div>
     </div>
   </div>
-
-  <!-- Dim backdrop for toast -->
-  <div id="toastBackdrop"></div>
 
   <!-- Restart toast: appears once when section mistakes >= 3 -->
   <div id="restartToast">
@@ -632,7 +622,6 @@ let toastAutoTimer   = null;
 function showRestartToast() {
   if (toastDismissed) return;
   document.getElementById('restartToast').classList.add('show');
-  document.getElementById('toastBackdrop').classList.add('show');
   clearTimeout(toastAutoTimer);
   toastAutoTimer = setTimeout(dismissToast, 8000);
 }
@@ -640,7 +629,6 @@ function showRestartToast() {
 function dismissToast() {
   toastDismissed = true;
   document.getElementById('restartToast').classList.remove('show');
-  document.getElementById('toastBackdrop').classList.remove('show');
   clearTimeout(toastAutoTimer);
 }
 

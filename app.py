@@ -133,8 +133,9 @@ def _generate_ai_feedback(stats: dict) -> dict:
             {"role": "system", "content": "/no_thinking"},
             {"role": "user",   "content": prompt},
         ],
-        max_tokens=2048,
+        max_tokens=400,
         temperature=0.3,
+        timeout=15,
     )
     msg = resp.choices[0].message
     text = (msg.content or '').strip()
@@ -264,8 +265,12 @@ def _reset_game(path: str) -> None:
                 changed = True
 
     if g_hand == 'BOTH':
-        rh_p = base_dir / f"{song_stem}_RH.mid"
-        lh_p = base_dir / f"{song_stem}_LH.mid"
+        rh_p = base_dir / f"{song_stem}_RH_processed.mid"
+        if not _file_exists(rh_p):
+            rh_p = base_dir / f"{song_stem}_RH.mid"
+        lh_p = base_dir / f"{song_stem}_LH_processed.mid"
+        if not _file_exists(lh_p):
+            lh_p = base_dir / f"{song_stem}_LH.mid"
         rh_notes = [dict(n, hand='RH') for n in _load_notes(str(rh_p))] if _file_exists(rh_p) else []
         lh_notes = [dict(n, hand='LH') for n in _load_notes(str(lh_p))] if _file_exists(lh_p) else []
         notes_data = sorted(rh_notes + lh_notes, key=lambda x: x['start'])
@@ -749,6 +754,18 @@ async def _run_pipeline(input_path: Path, task_id: str) -> None:
         processed_path = ARTIFACT_DIR / (rh_path.stem + "_processed.mid")
         await asyncio.to_thread(str_to_mid, processed_str, str(processed_path))
 
+        # Also process LH with the same key so hand-switching stays in tune
+        lh_raw = rh_path.parent / (rh_path.stem.replace('_RH', '_LH') + '.mid')
+        if _file_exists(lh_raw):
+            lh_transposed = await asyncio.to_thread(
+                transpose, str(lh_raw), target,
+                str(ARTIFACT_DIR / (lh_raw.stem + "_transposed.mid"))
+            )
+            lh_df = await asyncio.to_thread(mid_to_pd, str(lh_transposed))
+            lh_processed_df = lh_df.loc[lh_df.groupby('grouped_time')['pitch'].idxmin()].reset_index(drop=True)
+            lh_processed_path = ARTIFACT_DIR / (lh_raw.stem + "_processed.mid")
+            await asyncio.to_thread(str_to_mid, pd_to_str(lh_processed_df), str(lh_processed_path))
+
         tasks[task_id] = {
             "status": "done",
             "file":   processed_path.name,
@@ -776,13 +793,16 @@ async def set_hand_route(req: HandRequest):
     g_hand = req.hand
 
     if req.hand == 'RH':
-        candidates = [ARTIFACT_DIR / f"{g_current_song}_RH.mid",
+        candidates = [ARTIFACT_DIR / f"{g_current_song}_RH_processed.mid",
+                      ARTIFACT_DIR / f"{g_current_song}_RH.mid",
                       ARTIFACT_DIR / f"{g_current_song}.mid"]
     elif req.hand == 'LH':
-        candidates = [ARTIFACT_DIR / f"{g_current_song}_LH.mid",
+        candidates = [ARTIFACT_DIR / f"{g_current_song}_LH_processed.mid",
+                      ARTIFACT_DIR / f"{g_current_song}_LH.mid",
                       ARTIFACT_DIR / f"{g_current_song}.mid"]
-    else:
-        candidates = [ARTIFACT_DIR / f"{g_current_song}_RH.mid",
+    else:  # BOTH — pass the RH processed file; _reset_game will merge both
+        candidates = [ARTIFACT_DIR / f"{g_current_song}_RH_processed.mid",
+                      ARTIFACT_DIR / f"{g_current_song}_RH.mid",
                       ARTIFACT_DIR / f"{g_current_song}.mid"]
 
     for p in candidates:

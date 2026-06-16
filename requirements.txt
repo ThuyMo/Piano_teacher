@@ -14,4 +14,3 @@ python-dotenv>=1.0.0
 torch==2.10.0+cpu
 torchaudio==2.10.0+cpu
 transkun==2.0.1
-yt-dlp

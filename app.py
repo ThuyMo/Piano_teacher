@@ -248,7 +248,27 @@ def _reset_game(path: str) -> None:
     global g_wait_started_at, g_feedback_cache, g_feedback_future
 
     g_current_path = path
-    notes_data     = _load_notes(path)
+
+    # Tag each note with its hand so the frontend can colour by hand.
+    # For BOTH: merge _RH.mid + _LH.mid; for a single hand: tag from current file.
+    base_dir = Path(path).parent
+    stem_raw = Path(path).stem
+    song_stem = stem_raw
+    for suffix in ('_RH', '_LH'):
+        if song_stem.endswith(suffix):
+            song_stem = song_stem[:-len(suffix)]
+            break
+
+    if g_hand == 'BOTH':
+        rh_p = base_dir / f"{song_stem}_RH.mid"
+        lh_p = base_dir / f"{song_stem}_LH.mid"
+        rh_notes = [dict(n, hand='RH') for n in _load_notes(str(rh_p))] if _file_exists(rh_p) else []
+        lh_notes = [dict(n, hand='LH') for n in _load_notes(str(lh_p))] if _file_exists(lh_p) else []
+        notes_data = sorted(rh_notes + lh_notes, key=lambda x: x['start'])
+    else:
+        tag = 'LH' if g_hand == 'LH' else 'RH'
+        notes_data = [dict(n, hand=tag) for n in _load_notes(path)]
+
     groups         = _group_notes(notes_data)
     g_time         = (groups[0]['time'] - 4.0) if groups else 0.0
     g_status       = 'PLAYING'
@@ -264,12 +284,7 @@ def _reset_game(path: str) -> None:
     g_feedback_cache    = None
     g_feedback_future   = None
 
-    stem = Path(path).stem
-    for suffix in ('_RH', '_LH'):
-        if stem.endswith(suffix):
-            stem = stem[:-len(suffix)]
-            break
-    g_current_song = stem
+    g_current_song = song_stem
 
 
 # ─── yt-dlp helpers ───────────────────────────────────────────────────────────
@@ -296,6 +311,36 @@ def _yt_search(query: str) -> list:
                 "channel": data.get("channel") or data.get("uploader", ""),
                 "url": f"https://www.youtube.com/watch?v={video_id}",
                 "thumbnail": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+            })
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return entries
+
+
+def _sc_search(query: str) -> list:
+    result = subprocess.run(
+        ["yt-dlp", f"scsearch5:{query}",
+         "--dump-json", "--flat-playlist", "--quiet", "--no-warnings"],
+        capture_output=True, text=True, timeout=30
+    )
+    entries = []
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            url = data.get("url") or data.get("webpage_url", "")
+            if not url:
+                continue
+            if not url.startswith("http"):
+                url = "https://soundcloud.com" + url
+            entries.append({
+                "id": str(data.get("id", "")),
+                "title": data.get("title", "Unknown"),
+                "duration": data.get("duration"),
+                "channel": data.get("uploader") or data.get("channel", ""),
+                "url": url,
+                "thumbnail": data.get("thumbnail", ""),
             })
         except (json.JSONDecodeError, KeyError):
             continue
@@ -733,8 +778,8 @@ async def set_hand_route(req: HandRequest):
         candidates = [ARTIFACT_DIR / f"{g_current_song}_LH.mid",
                       ARTIFACT_DIR / f"{g_current_song}.mid"]
     else:
-        candidates = [ARTIFACT_DIR / f"{g_current_song}.mid",
-                      ARTIFACT_DIR / f"{g_current_song}_RH.mid"]
+        candidates = [ARTIFACT_DIR / f"{g_current_song}_RH.mid",
+                      ARTIFACT_DIR / f"{g_current_song}.mid"]
 
     for p in candidates:
         if _file_exists(p):
@@ -875,6 +920,15 @@ async def search_youtube(q: str):
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
+@app.get("/api/search-soundcloud")
+async def search_soundcloud_api(q: str):
+    try:
+        results = await asyncio.to_thread(_sc_search, q)
+        return JSONResponse({"results": results})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 @app.get("/api/preview/{video_id}")
 async def preview_audio(video_id: str):
     if not re.match(r'^[A-Za-z0-9_-]{11}$', video_id):
@@ -898,6 +952,26 @@ async def download_youtube(req: DownloadRequest):
             safe_title = re.sub(r'[^\w\s-]', '', req.title)[:40].strip() or task_id
             audio_path = UPLOADS_DIR / f"{safe_title}_{task_id}.mp3"
             tasks[task_id]["step"] = "Downloading audio from YouTube..."
+            await asyncio.to_thread(_download_audio, req.url, str(audio_path))
+        except Exception as exc:
+            tasks[task_id] = {"status": "error", "error": str(exc)}
+            return
+        await _run_pipeline(audio_path, task_id)
+
+    asyncio.create_task(pipeline())
+    return JSONResponse({"task_id": task_id})
+
+
+@app.post("/api/download-soundcloud")
+async def download_soundcloud_api(req: DownloadRequest):
+    task_id = str(uuid.uuid4())[:8]
+    tasks[task_id] = {"status": "processing", "step": "Downloading from SoundCloud..."}
+
+    async def pipeline():
+        try:
+            safe_title = re.sub(r'[^\w\s-]', '', req.title)[:40].strip() or task_id
+            audio_path = UPLOADS_DIR / f"{safe_title}_{task_id}.mp3"
+            tasks[task_id]["step"] = "Downloading audio from SoundCloud..."
             await asyncio.to_thread(_download_audio, req.url, str(audio_path))
         except Exception as exc:
             tasks[task_id] = {"status": "error", "error": str(exc)}
@@ -971,9 +1045,7 @@ async def load_piece_route(req: LoadPieceRequest):
     if not midi_path.exists():
         return JSONResponse({"error": "File not found"}, status_code=404)
     try:
-        piece_path = await asyncio.to_thread(
-            _extract_piece, str(midi_path), req.piece_index, req.total_pieces
-        )
+        piece_path = _extract_piece(str(midi_path), req.piece_index, req.total_pieces)
         _reset_game(str(piece_path))
         return JSONResponse({"ok": True})
     except Exception as exc:

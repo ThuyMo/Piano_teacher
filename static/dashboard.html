@@ -386,6 +386,47 @@
       padding: 24px;
       font-size: 14px;
     }
+
+    /* ── Source toggle ── */
+    .source-toggle {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .src-btn {
+      padding: 7px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      font-weight: 700;
+      cursor: pointer;
+      background: rgba(255,255,255,0.5);
+      color: #b0a0c8;
+      border: 1.5px solid rgba(180,150,220,0.3);
+      transition: all 0.2s;
+    }
+    .src-btn.active {
+      background: linear-gradient(135deg, #8b5cf6, #a855f7);
+      color: #fff;
+      border-color: transparent;
+      box-shadow: 0 3px 10px rgba(139,92,246,0.3);
+    }
+    .src-btn:hover:not(.active) {
+      border-color: #c4a8f0;
+      color: #8b5cf6;
+    }
+    .sc-thumb-placeholder {
+      width: 112px; height: 63px;
+      border-radius: 8px;
+      flex-shrink: 0;
+      background: linear-gradient(135deg, #ff5500, #ff7733);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 26px;
+    }
   </style>
 </head>
 <body>
@@ -395,12 +436,17 @@
 
   <!-- Tabs -->
   <div class="tabs">
-    <div class="tab active" id="tab-search" onclick="switchTab('search')">🔍 Search YouTube</div>
+    <div class="tab active" id="tab-search" onclick="switchTab('search')">🔍 Search</div>
     <div class="tab"        id="tab-upload" onclick="switchTab('upload')">📁 Upload File</div>
   </div>
 
   <!-- Search panel -->
   <div class="tab-panel active" id="panel-search">
+    <!-- Source toggle -->
+    <div class="source-toggle">
+      <button class="src-btn active" id="src-yt" onclick="setSource('youtube')">▶ YouTube</button>
+      <button class="src-btn" id="src-sc" onclick="setSource('soundcloud')">☁ SoundCloud</button>
+    </div>
     <div class="search-row">
       <input class="search-input" id="searchInput" type="text"
              placeholder="e.g. Fur Elise, River Flows in You, Clair de Lune…" />
@@ -454,6 +500,18 @@ function escAttr(s) {
   return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// ─── Source toggle ────────────────────────────────────────────────────────────
+let currentSource = 'youtube';
+
+function setSource(src) {
+  currentSource = src;
+  document.getElementById('src-yt').classList.toggle('active', src === 'youtube');
+  document.getElementById('src-sc').classList.toggle('active', src === 'soundcloud');
+  searchResults.innerHTML = src === 'soundcloud'
+    ? '<div class="search-hint">☁ Type a song name and press Search — top 5 results from SoundCloud will appear here</div>'
+    : '<div class="search-hint">✨ Type a song name and press Search — top 5 piano covers will appear here</div>';
+}
+
 // ─── Search ───────────────────────────────────────────────────────────────────
 const searchInput   = document.getElementById('searchInput');
 const searchBtn     = document.getElementById('searchBtn');
@@ -466,38 +524,64 @@ async function doSearch() {
   if (!q) return;
   searchBtn.disabled = true;
   searchBtn.textContent = 'Searching…';
-  searchResults.innerHTML = '<div class="search-hint">🎼 Searching YouTube…</div>';
+  const isSC = currentSource === 'soundcloud';
+  searchResults.innerHTML = `<div class="search-hint">🎼 Searching ${isSC ? 'SoundCloud' : 'YouTube'}…</div>`;
 
   try {
-    const { results, error } = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+    const endpoint = isSC ? `/api/search-soundcloud?q=${encodeURIComponent(q)}` : `/api/search?q=${encodeURIComponent(q)}`;
+    const { results, error } = await fetch(endpoint).then(r => r.json());
     if (error) throw new Error(error);
     if (!results || !results.length) {
       searchResults.innerHTML = '<div class="search-hint">No results found. Try a different song name.</div>';
       return;
     }
-    searchResults.innerHTML = results.map((r, i) => `
-      <div class="result-card">
-        <img class="result-thumb" src="${escAttr(r.thumbnail)}" alt=""
-             onerror="this.style.visibility='hidden'" />
-        <div class="result-info">
-          <div class="result-title" title="${escAttr(r.title)}">${r.title}</div>
-          <div class="result-meta">${r.channel || ''}${r.duration ? ' · ' + fmtDuration(r.duration) : ''}</div>
-          <audio class="result-audio" id="audio-${i}" controls></audio>
-          <div class="result-actions">
-            <button class="btn-sm btn-preview" id="prev-${i}"
-                    onclick="loadPreview(${i}, '${escAttr(r.id)}')">▶ Preview 30s</button>
-            <button class="btn-sm btn-use"
-                    onclick="useYouTube('${escAttr(r.url)}', '${escAttr(r.title)}')">Use this ↗</button>
-          </div>
-        </div>
-      </div>
-    `).join('');
+    searchResults.innerHTML = results.map((r, i) => isSC
+      ? renderSCCard(r, i)
+      : renderYTCard(r, i)
+    ).join('');
   } catch (e) {
     searchResults.innerHTML = `<div class="search-hint">Error: ${e.message}</div>`;
   } finally {
     searchBtn.disabled = false;
     searchBtn.textContent = 'Search';
   }
+}
+
+function renderYTCard(r, i) {
+  return `
+    <div class="result-card">
+      <img class="result-thumb" src="${escAttr(r.thumbnail)}" alt=""
+           onerror="this.style.visibility='hidden'" />
+      <div class="result-info">
+        <div class="result-title" title="${escAttr(r.title)}">${r.title}</div>
+        <div class="result-meta">${r.channel || ''}${r.duration ? ' · ' + fmtDuration(r.duration) : ''}</div>
+        <audio class="result-audio" id="audio-${i}" controls></audio>
+        <div class="result-actions">
+          <button class="btn-sm btn-preview" id="prev-${i}"
+                  onclick="loadPreview(${i}, '${escAttr(r.id)}')">▶ Preview 30s</button>
+          <button class="btn-sm btn-use"
+                  onclick="useYouTube('${escAttr(r.url)}', '${escAttr(r.title)}')">Use this ↗</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderSCCard(r, i) {
+  const thumb = r.thumbnail
+    ? `<img class="result-thumb" src="${escAttr(r.thumbnail)}" alt="" onerror="this.style.display='none'" />`
+    : `<div class="sc-thumb-placeholder">☁</div>`;
+  return `
+    <div class="result-card">
+      ${thumb}
+      <div class="result-info">
+        <div class="result-title" title="${escAttr(r.title)}">${r.title}</div>
+        <div class="result-meta">${r.channel || ''}${r.duration ? ' · ' + fmtDuration(r.duration) : ''}</div>
+        <div class="result-actions">
+          <button class="btn-sm btn-use"
+                  onclick="useSoundCloud('${escAttr(r.url)}', '${escAttr(r.title)}')">Use this ↗</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 async function loadPreview(idx, videoId) {
@@ -527,6 +611,16 @@ async function useYouTube(url, title) {
     body: JSON.stringify({ url, title }),
   }).then(r => r.json());
   showStatus('Downloading from YouTube…');
+  pollStatus(task_id);
+}
+
+async function useSoundCloud(url, title) {
+  const { task_id } = await fetch('/api/download-soundcloud', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, title }),
+  }).then(r => r.json());
+  showStatus('Downloading from SoundCloud…');
   pollStatus(task_id);
 }
 

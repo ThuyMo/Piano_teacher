@@ -465,10 +465,10 @@
 
 <script>
 // ─── Constants ────────────────────────────────────────────────────────────────
-const START_MIDI = 36, END_MIDI = 95;
+const START_MIDI = 21, END_MIDI = 108;
 const IS_BLACK   = new Set([1, 3, 6, 8, 10]);
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-const WW = 36, WH = 140, BW = 22, BH = 88;
+const WW = 22, WH = 130, BW = 13, BH = 82;
 const PAD_X      = 20;
 const HEADER_H   = 64;
 const FALL_H     = 440;
@@ -1026,7 +1026,7 @@ function render() {
   ctx.fillStyle = '#12121a';
   ctx.fillRect(0, 0, WINDOW_W, WINDOW_H);
 
-  // Lane guides
+  // Lane guides (uniform subtle stripe per white key)
   for (let p = START_MIDI; p <= END_MIDI; p++) {
     const k = keys[p];
     if (!k || k.isBlack) continue;
@@ -1047,17 +1047,17 @@ function render() {
     const w   = k.isBlack ? BW : WW - 1;
     const h   = Math.max(8, (note.end - note.start) * FALL_SPEED);
     const bot = HEADER_H + FALL_H - (note.start - gt) * FALL_SPEED;
-    const top = bot - h;
-    const dT  = Math.max(top, HEADER_H);
-    const dB  = Math.min(bot, HEADER_H + FALL_H);
+    const dT  = Math.max(bot - h, HEADER_H);
+    const dB  = Math.min(bot,     HEADER_H + FALL_H);
     const dH  = dB - dT;
     if (dH <= 0) continue;
 
-    const isWait = waitPitches.includes(note.pitch);
     const isHit  = hitPitches.includes(note.pitch);
-    if (isHit)       ctx.fillStyle = '#50f078';
-    else if (isWait) ctx.fillStyle = '#ffc832';
-    else             ctx.fillStyle = k.isBlack ? '#3270dc' : '#5096ff';
+    const isWait = waitPitches.includes(note.pitch);
+
+    if (isHit)       ctx.fillStyle = '#50f078';          // green = correct
+    else if (isWait) ctx.fillStyle = '#ffc832';          // yellow = waiting
+    else             ctx.fillStyle = k.isBlack ? '#3270dc' : '#5096ff'; // blue
 
     ctx.fillRect(x, dT, w, dH);
     ctx.strokeStyle = '#12121a';
@@ -1076,15 +1076,12 @@ function render() {
     const x      = k.x + PAD_X;
     const needed = waitPitches.includes(p) && !hitPitches.includes(p);
     const active = activeNotes.includes(p) || mousePressedKeys.has(p);
+    const isWrong = wrongNote && needed;
 
-    // Wrong note highlight: if this is a required key while wrong was pressed
-    const isRequired = waitPitches.includes(p);
-    const isWrongHighlight = wrongNote && isRequired && !hitPitches.includes(p);
-
-    if (active)                ctx.fillStyle = '#64b4ff';
-    else if (isWrongHighlight) ctx.fillStyle = '#ff6644';  // orange-red for hint
-    else if (needed)           ctx.fillStyle = '#ffc832';
-    else                       ctx.fillStyle = '#ffffff';
+    if (active)       ctx.fillStyle = '#64b4ff';   // light blue = pressed
+    else if (isWrong) ctx.fillStyle = '#ff6644';   // orange-red = wrong
+    else if (needed)  ctx.fillStyle = '#ffc832';   // yellow = need to press
+    else              ctx.fillStyle = '#ffffff';
 
     ctx.fillRect(x, PIANO_TOP, WW - 1, WH);
     ctx.strokeStyle = '#505060';
@@ -1093,9 +1090,15 @@ function render() {
 
     if (p % 12 === 0) {
       ctx.fillStyle = '#888';
-      ctx.font = '11px Arial';
-      ctx.fillText(`C${Math.floor(p/12)-1}`, x + 3, PIANO_TOP + WH - 5);
+      ctx.font = '9px Arial';
+      ctx.fillText(`C${Math.floor(p / 12) - 1}`, x + 2, PIANO_TOP + WH - 5);
     }
+  }
+
+  // Middle-C divider
+  if (keys[60]) {
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fillRect(keys[60].x + PAD_X - 1, PIANO_TOP, 2, WH);
   }
 
   // Piano – black keys
@@ -1105,12 +1108,12 @@ function render() {
     const x      = k.x + PAD_X;
     const needed = waitPitches.includes(p) && !hitPitches.includes(p);
     const active = activeNotes.includes(p) || mousePressedKeys.has(p);
-    const isWrongHighlight = wrongNote && needed;
+    const isWrong = wrongNote && needed;
 
-    if (active)                ctx.fillStyle = '#3278c8';
-    else if (isWrongHighlight) ctx.fillStyle = '#993322';
-    else if (needed)           ctx.fillStyle = '#b08800';
-    else                       ctx.fillStyle = '#0f0f0f';
+    if (active)       ctx.fillStyle = '#3278c8';   // blue = pressed
+    else if (isWrong) ctx.fillStyle = '#993322';   // dark red = wrong
+    else if (needed)  ctx.fillStyle = '#b08800';   // dark yellow = need to press
+    else              ctx.fillStyle = '#0f0f0f';
 
     ctx.fillRect(x, PIANO_TOP, BW, BH);
   }

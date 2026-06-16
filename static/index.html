@@ -46,7 +46,48 @@
     <div id="conn">Connecting to server...</div>
   </div>
 
+  <!-- Finish overlay (shown when piece is completed) -->
+  <div id="finishOverlay" style="
+    display:none; position:fixed; inset:0;
+    background:rgba(10,10,18,0.82);
+    backdrop-filter:blur(6px);
+    flex-direction:column; align-items:center; justify-content:center;
+    z-index:100; font-family:Arial,sans-serif;
+  ">
+    <div style="
+      background:#12121a; border:1px solid #252535;
+      border-radius:16px; padding:40px 48px;
+      text-align:center; max-width:360px;
+      box-shadow:0 20px 60px rgba(0,0,0,0.5);
+    ">
+      <div style="font-size:48px;margin-bottom:12px;">🎉</div>
+      <div style="font-size:22px;font-weight:bold;color:#50f078;margin-bottom:6px;">Part Complete!</div>
+      <div id="finishScore" style="font-size:14px;color:#8888aa;margin-bottom:28px;"></div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button id="btnBackLearning" style="
+          background:linear-gradient(135deg,#8b5cf6,#a855f7);
+          color:#fff; border:none; padding:11px 24px;
+          border-radius:10px; font-size:14px; font-weight:bold;
+          cursor:pointer; transition:opacity 0.15s;
+        ">← Back to Learning Path</button>
+        <button onclick="location.reload()" style="
+          background:#1e1e2a; color:#8888aa;
+          border:1px solid #252535; padding:9px 24px;
+          border-radius:10px; font-size:13px;
+          cursor:pointer; transition:background 0.15s;
+        ">↺ Play Again</button>
+      </div>
+    </div>
+  </div>
+
 <script>
+// ─── Learning path context (from URL params) ─────────────────────────────────
+const _lp       = new URLSearchParams(location.search);
+const lpFile    = _lp.get('file')   || '';
+const lpPiece   = _lp.get('piece')  !== null ? parseInt(_lp.get('piece'))  : null;
+const lpTotal   = _lp.get('total')  !== null ? parseInt(_lp.get('total'))  : null;
+const lpReturn  = _lp.get('return') || '/';
+
 // ─── Constants (mirror server values) ────────────────────────────────────────
 const START_MIDI  = 36, END_MIDI = 95;
 const IS_BLACK    = new Set([1, 3, 6, 8, 10]);
@@ -94,6 +135,7 @@ let serverStamp = 0;
 let gameStatus  = 'LOADING';
 let score = 0, total = 0;
 let activeNotes = [], waitPitches = [], hitPitches = [];
+let finishedHandled = false;
 
 function liveGameTime() {
   if (gameStatus !== 'PLAYING') return serverTime;
@@ -109,7 +151,7 @@ let midiStatus = 'MIDI: not connected';
 // ─── Browser audio ───────────────────────────────────────────────────────────
 let audioCtx = null;
 let masterGain = null;
-let soundEnabled = false;
+let soundEnabled = true;
 const soundingNotes = new Map();
 
 function midiToHz(pitch) {
@@ -185,6 +227,7 @@ async function init() {
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'state') {
+      const prevStatus = gameStatus;
       serverTime  = msg.game_time;
       serverStamp = performance.now();
       gameStatus  = msg.status;
@@ -193,6 +236,10 @@ async function init() {
       activeNotes = msg.active_notes;
       waitPitches = msg.wait_pitches;
       hitPitches  = msg.hit_pitches;
+      if (prevStatus !== 'FINISHED' && gameStatus === 'FINISHED' && !finishedHandled) {
+        finishedHandled = true;
+        onPieceFinished();
+      }
     }
   };
 }
@@ -363,6 +410,21 @@ function render() {
   }
 
   requestAnimationFrame(render);
+}
+
+function onPieceFinished() {
+  if (lpFile && lpPiece !== null) {
+    const key  = `piano_progress_${lpFile}`;
+    const done = new Set(JSON.parse(localStorage.getItem(key) || '[]'));
+    done.add(lpPiece);
+    localStorage.setItem(key, JSON.stringify([...done]));
+  }
+  const overlay = document.getElementById('finishOverlay');
+  document.getElementById('finishScore').textContent = `Score: ${score} / ${total}`;
+  overlay.style.display = 'flex';
+  document.getElementById('btnBackLearning').onclick = () => {
+    window.location.href = decodeURIComponent(lpReturn);
+  };
 }
 
 init().then(() => requestAnimationFrame(render));

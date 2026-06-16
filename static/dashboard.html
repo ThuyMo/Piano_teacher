@@ -590,29 +590,34 @@ async function pollStatus(task_id) {
 // ─── File list ────────────────────────────────────────────────────────────────
 const fileList = document.getElementById('fileList');
 
+function songName(filename) {
+  return filename
+    .replace(/_processed\.mid$/i, '')
+    .replace(/_transposed/gi, '')
+    .replace(/_RH/gi, '')
+    .replace(/_/g, ' ')
+    .trim()
+    .replace(/\b\w/g, c => c.toUpperCase()) || filename;
+}
+
 async function loadFiles() {
   const { files } = await fetch('/api/files').then(r => r.json());
-  if (!files.length) {
-    fileList.innerHTML = '<div class="empty">No files yet — search or upload a song to begin.</div>';
+  const processed = files.filter(f => f.name.endsWith('_processed.mid'));
+  if (!processed.length) {
+    fileList.innerHTML = '<div class="empty">No songs yet — search or upload a song to begin.</div>';
     return;
   }
-  fileList.innerHTML = files.map(f => `
+  fileList.innerHTML = processed.map(f => `
     <div class="file-item">
       <div class="file-dot"></div>
-      <span class="file-name">${f.name}</span>
-      <span class="file-size">${(f.size / 1024).toFixed(1)} KB</span>
+      <span class="file-name">${songName(f.name)}</span>
       <button class="btn-play" onclick="playFile('${escAttr(f.name)}')">▶ Play</button>
     </div>
   `).join('');
 }
 
 async function playFile(name) {
-  await fetch('/load', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file: name }),
-  });
-  window.location.href = '/game';
+  window.location.href = `/learning_path?file=${encodeURIComponent(name)}`;
 }
 
 loadFiles();

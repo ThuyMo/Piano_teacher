@@ -168,6 +168,11 @@ async def game_page():
     return FileResponse(BASE_DIR / "static" / "index.html")
 
 
+@app.get("/learning_path")
+async def learning_path_page():
+    return FileResponse(BASE_DIR / "static" / "learning_path.html")
+
+
 @app.get("/notes")
 async def get_notes():
     return JSONResponse({"notes": notes_data, "total": len(groups)})
@@ -187,6 +192,11 @@ class LoadRequest(BaseModel):
 class DownloadRequest(BaseModel):
     url: str
     title: str = ""
+
+class LoadPieceRequest(BaseModel):
+    file: str
+    piece_index: int
+    total_pieces: int
 
 
 @app.post("/load")
@@ -216,9 +226,7 @@ async def _run_pipeline(input_path: Path, task_id: str) -> None:
 
         tasks[task_id]["step"] = "Processing notes for beginner..."
         df = await asyncio.to_thread(mid_to_pd, str(transposed_path))
-        processed_df = df.groupby('grouped_time').apply(
-            lambda x: x.loc[x['pitch'].idxmax()]
-        ).reset_index(drop=True)
+        processed_df = df.loc[df.groupby('grouped_time')['pitch'].idxmax()].reset_index(drop=True)
         processed_str = pd_to_str(processed_df)
         processed_path = ARTIFACT_DIR / (rh_path.stem + "_processed.mid")
         await asyncio.to_thread(str_to_mid, processed_str, str(processed_path))
@@ -290,6 +298,78 @@ async def download_youtube(req: DownloadRequest):
 
     asyncio.create_task(pipeline())
     return JSONResponse({"task_id": task_id})
+
+
+def _compute_pieces(midi_path: str) -> list:
+    df = mid_to_pd(midi_path)
+    if df.empty:
+        return []
+    times = sorted(df['grouped_time'].unique())
+    n_groups = len(times)
+    n_pieces = max(2, min(10, round(n_groups / 20)))
+    chunk = max(1, n_groups // n_pieces)
+    pieces = []
+    for i in range(n_pieces):
+        start_idx = i * chunk
+        end_idx = (i + 1) * chunk if i < n_pieces - 1 else n_groups
+        if start_idx >= n_groups:
+            break
+        slice_times = times[start_idx:end_idx]
+        piece_df = df[df['grouped_time'].isin(set(slice_times))]
+        pieces.append({
+            "index": i,
+            "label": f"Part {i + 1}",
+            "note_groups": len(slice_times),
+            "notes": int(len(piece_df)),
+            "duration": round(float(slice_times[-1] - slice_times[0]), 1),
+            "start_time": round(float(slice_times[0]), 1),
+        })
+    return pieces
+
+
+def _extract_piece(midi_path: str, piece_index: int, total_pieces: int) -> Path:
+    df = mid_to_pd(midi_path)
+    times = sorted(df['grouped_time'].unique())
+    n_groups = len(times)
+    chunk = max(1, n_groups // total_pieces)
+    start_idx = piece_index * chunk
+    end_idx = (piece_index + 1) * chunk if piece_index < total_pieces - 1 else n_groups
+    slice_times = set(times[start_idx:end_idx])
+    piece_df = df[df['grouped_time'].isin(slice_times)].copy()
+    offset = float(piece_df['grouped_time'].min())
+    piece_df['grouped_time'] -= offset
+    piece_df['timestamp'] -= offset
+    piece_str = pd_to_str(piece_df)
+    piece_path = ARTIFACT_DIR / f"{Path(midi_path).stem}_piece{piece_index}.mid"
+    str_to_mid(piece_str, str(piece_path))
+    return piece_path
+
+
+@app.get("/api/pieces")
+async def get_pieces(file: str):
+    midi_path = ARTIFACT_DIR / file
+    if not midi_path.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    try:
+        pieces = await asyncio.to_thread(_compute_pieces, str(midi_path))
+        return JSONResponse({"pieces": pieces, "total": len(pieces)})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/load_piece")
+async def load_piece_route(req: LoadPieceRequest):
+    midi_path = ARTIFACT_DIR / req.file
+    if not midi_path.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    try:
+        piece_path = await asyncio.to_thread(
+            _extract_piece, str(midi_path), req.piece_index, req.total_pieces
+        )
+        _reset_game(str(piece_path))
+        return JSONResponse({"ok": True})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─── WebSocket ────────────────────────────────────────────────────────────────

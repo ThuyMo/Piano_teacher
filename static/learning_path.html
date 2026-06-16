@@ -194,6 +194,125 @@
       text-align: center; font-style: italic;
       color: #b0a0c8; padding: 48px; font-size: 15px;
     }
+
+    /* ── Test card ── */
+    .test-card {
+      background: linear-gradient(135deg, #1c1400, #2d1f00);
+      border: 1px solid rgba(251,191,36,0.3);
+      border-radius: 18px;
+      padding: 22px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 28px;
+      box-shadow: 0 6px 28px rgba(180,130,0,0.2);
+      transition: all 0.24s ease;
+    }
+    .test-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 12px 40px rgba(180,130,0,0.32);
+    }
+    .test-card-info { flex: 1; min-width: 0; }
+    .test-card-label {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 20px;
+      font-weight: 700;
+      color: #fbbf24;
+      margin-bottom: 4px;
+    }
+    .test-card-sub {
+      font-style: italic;
+      font-size: 13px;
+      color: rgba(251,191,36,0.6);
+    }
+    .btn-play-test {
+      background: linear-gradient(135deg, #d97706, #b45309);
+      color: #fff;
+      border: none;
+      padding: 11px 28px;
+      border-radius: 12px;
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      box-shadow: 0 4px 14px rgba(180,100,0,0.35);
+      flex-shrink: 0;
+    }
+    .btn-play-test:hover {
+      transform: scale(1.04);
+      box-shadow: 0 6px 22px rgba(180,100,0,0.5);
+    }
+    .btn-play-test:disabled { opacity: 0.6; cursor: default; transform: none; }
+
+    /* ── Full-song card ── */
+    .full-song-card {
+      background: linear-gradient(135deg, #2d1b6e, #4c1d95, #5b21b6);
+      border: 1px solid rgba(167,139,250,0.3);
+      border-radius: 18px;
+      padding: 24px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 28px;
+      box-shadow: 0 6px 28px rgba(76,29,149,0.3);
+      transition: all 0.24s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .full-song-card::before {
+      content: '𝄞';
+      position: absolute;
+      right: 20px; top: -10px;
+      font-size: 110px;
+      color: rgba(255,255,255,0.05);
+      pointer-events: none;
+      line-height: 1;
+    }
+    .full-song-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 12px 40px rgba(76,29,149,0.45);
+    }
+    .full-song-info { flex: 1; min-width: 0; }
+    .full-song-label {
+      font-family: 'Playfair Display', serif;
+      font-style: italic;
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+    .full-song-sub {
+      font-style: italic;
+      font-size: 13px;
+      color: rgba(196,165,255,0.85);
+    }
+    .btn-play-full {
+      background: linear-gradient(135deg, #a78bfa, #7c3aed);
+      color: #fff;
+      border: none;
+      padding: 11px 28px;
+      border-radius: 12px;
+      font-family: 'Lato', sans-serif;
+      font-style: italic;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      box-shadow: 0 4px 14px rgba(124,58,237,0.4);
+      flex-shrink: 0;
+    }
+    .btn-play-full:hover {
+      transform: scale(1.04);
+      box-shadow: 0 6px 22px rgba(124,58,237,0.55);
+    }
+    .btn-play-full:disabled { opacity: 0.6; cursor: default; transform: none; }
   </style>
 </head>
 <body>
@@ -211,6 +330,24 @@
     <div class="progress-track">
       <div class="progress-fill" id="progressFill"></div>
     </div>
+  </div>
+
+  <!-- Full-song card -->
+  <div class="full-song-card" id="fullSongCard" style="display:none;">
+    <div class="full-song-info">
+      <div class="full-song-label">🎼 Đánh cả bài</div>
+      <div class="full-song-sub" id="fullSongSub">Chơi toàn bộ bản nhạc từ đầu đến cuối</div>
+    </div>
+    <button class="btn-play-full" id="btnPlayFull" onclick="playFullSong()">▶ Bắt đầu</button>
+  </div>
+
+  <!-- Test card -->
+  <div class="test-card" id="testCard" style="display:none;">
+    <div class="test-card-info">
+      <div class="test-card-label">📝 Kiểm tra</div>
+      <div class="test-card-sub" id="testCardSub">Chơi tự do — không có gợi ý · AI chấm điểm và đưa ra nhận xét</div>
+    </div>
+    <button class="btn-play-test" id="btnPlayTest" onclick="playTest()">▶ Bắt đầu kiểm tra</button>
   </div>
 
   <div class="section-label" id="sectionLabel">♩ Song Parts</div>
@@ -233,7 +370,8 @@ function fmtTitle(name) {
   return name
     .replace(/_processed\.mid$/i, '')
     .replace(/_transposed/gi, '')
-    .replace(/_RH/gi, ' ')
+    .replace(/_(RH|LH)$/gi, '')
+    .replace(/_[0-9a-f]{8}$/i, '')   // strip trailing 8-char task ID
     .replace(/_/g, ' ')
     .trim()
     .replace(/\b\w/g, c => c.toUpperCase()) || name;
@@ -253,6 +391,17 @@ function renderPieces(pieces) {
   document.getElementById('progressPct').textContent  = `${doneCount} of ${pieces.length} parts completed`;
   document.getElementById('sectionLabel').textContent = `♩ ${pieces.length} Parts`;
   document.getElementById('songMeta').textContent     = `${pieces.length} parts · ${pct}% complete`;
+
+  // Show full-song card with total note count
+  const totalGroups = pieces.reduce((s, p) => s + p.note_groups, 0);
+  document.getElementById('fullSongSub').textContent =
+    `${totalGroups} nhóm nốt · ${pieces.length} đoạn · chơi liên tục từ đầu đến cuối`;
+  document.getElementById('fullSongCard').style.display = '';
+
+  // Show test card
+  document.getElementById('testCardSub').textContent =
+    `${totalGroups} nhóm nốt · chơi tự do, không có gợi ý · AI chấm điểm và đưa ra nhận xét`;
+  document.getElementById('testCard').style.display = '';
 
   const nextIndex = pieces.find(p => !completed.has(p.index))?.index ?? -1;
 
@@ -281,6 +430,48 @@ function renderPieces(pieces) {
         ${isDone ? '<div class="tick">✓</div>' : ''}
       </div>`;
   }).join('');
+}
+
+async function playTest() {
+  const btn = document.getElementById('btnPlayTest');
+  btn.textContent = '⏳ Loading…';
+  btn.disabled = true;
+  try {
+    const res  = await fetch('/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: fileName, hand: 'RH' }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const ret = encodeURIComponent(`/learning_path?file=${encodeURIComponent(fileName)}`);
+    window.location.href = `/game?file=${encodeURIComponent(fileName)}&mode=test&return=${ret}`;
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+    btn.textContent = '▶ Bắt đầu kiểm tra';
+    btn.disabled = false;
+  }
+}
+
+async function playFullSong() {
+  const btn = document.getElementById('btnPlayFull');
+  btn.textContent = '⏳ Loading…';
+  btn.disabled = true;
+  try {
+    const res  = await fetch('/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: fileName, hand: 'RH' }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const ret = encodeURIComponent(`/learning_path?file=${encodeURIComponent(fileName)}`);
+    window.location.href = `/game?file=${encodeURIComponent(fileName)}&return=${ret}`;
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+    btn.textContent = '▶ Bắt đầu';
+    btn.disabled = false;
+  }
 }
 
 async function playPiece(pieceIndex, totalPieces) {

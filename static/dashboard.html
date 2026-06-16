@@ -455,6 +455,33 @@
     <div id="searchResults" class="results">
       <div class="search-hint">✨ Type a song name and press Search — top 5 piano covers will appear here</div>
     </div>
+
+    <!-- Processing progress (hidden until a song is selected) -->
+    <div id="searchProgress" style="display:none;">
+      <div style="
+        background: rgba(139,92,246,0.06);
+        border: 1px solid rgba(139,92,246,0.2);
+        border-radius: 12px;
+        padding: 20px 22px;
+      ">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;">
+          <span id="searchProgressLabel" style="
+            font-family:'Playfair Display',serif; font-style:italic;
+            font-size:14px; color:#6c3fc5;
+          ">Đang xử lý…</span>
+          <span id="searchProgressPct" style="font-style:italic; font-size:13px; color:#9580b0;">0%</span>
+        </div>
+        <div style="height:8px; background:rgba(180,150,220,0.18); border-radius:99px; overflow:hidden; margin-bottom:14px;">
+          <div id="searchProgressFill" style="
+            height:100%; width:0%;
+            background: linear-gradient(90deg,#8b5cf6,#ec4899,#f472b6);
+            border-radius:99px;
+            transition: width 0.5s cubic-bezier(0.4,0,0.2,1);
+          "></div>
+        </div>
+        <div id="searchProgressStep" style="font-style:italic; font-size:12px; color:#b0a0c8;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Upload panel -->
@@ -466,17 +493,37 @@
       <input type="file" id="fileInput" accept="audio/*" />
       <button class="btn" onclick="document.getElementById('fileInput').click()">Browse File</button>
     </div>
-  </div>
 
-  <!-- Status -->
-  <div id="status">
-    <div class="spinner" id="spinner"></div>
-    <span id="statusText">Processing…</span>
-    <button id="playNew"></button>
+    <!-- Processing progress (shown while file is being processed) -->
+    <div id="uploadProgress" style="display:none;">
+      <div style="
+        background: rgba(139,92,246,0.06);
+        border: 1px solid rgba(139,92,246,0.2);
+        border-radius: 12px;
+        padding: 20px 22px;
+      ">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;">
+          <span id="uploadProgressLabel" style="
+            font-family:'Playfair Display',serif; font-style:italic;
+            font-size:14px; color:#6c3fc5;
+          ">Đang xử lý…</span>
+          <span id="uploadProgressPct" style="font-style:italic; font-size:13px; color:#9580b0;">0%</span>
+        </div>
+        <div style="height:8px; background:rgba(180,150,220,0.18); border-radius:99px; overflow:hidden; margin-bottom:14px;">
+          <div id="uploadProgressFill" style="
+            height:100%; width:0%;
+            background: linear-gradient(90deg,#8b5cf6,#ec4899,#f472b6);
+            border-radius:99px;
+            transition: width 0.5s cubic-bezier(0.4,0,0.2,1);
+          "></div>
+        </div>
+        <div id="uploadProgressStep" style="font-style:italic; font-size:12px; color:#b0a0c8;"></div>
+      </div>
+    </div>
   </div>
-
+  
   <!-- File list -->
-  <div class="section-label">♩ Processed Files</div>
+  <div class="section-label">♩ Available Songs</div>
   <div class="file-list" id="fileList">
     <div class="empty">No files yet — search or upload a song to begin.</div>
   </div>
@@ -604,24 +651,66 @@ async function loadPreview(idx, videoId) {
   };
 }
 
+// ─── Search freeze / progress ─────────────────────────────────────────────────
+const STEP_PCT = {
+  'Downloading':   15,
+  'Converting':    35,
+  'Splitting':     60,
+  'Detecting':     80,
+  'Processing':    95,
+};
+
+function stepToPct(step) {
+  for (const [key, pct] of Object.entries(STEP_PCT)) {
+    if (step.startsWith(key)) return pct;
+  }
+  return 10;
+}
+
+function freezeSearch(songTitle) {
+  searchInput.disabled = true;
+  searchBtn.disabled   = true;
+  document.getElementById('searchResults').style.display  = 'none';
+  const prog = document.getElementById('searchProgress');
+  prog.style.display = 'block';
+  document.getElementById('searchProgressLabel').textContent = `🎵 "${songTitle}"`;
+  setSearchPct(0, 'Đang chuẩn bị…');
+}
+
+function unfreezeSearch(ok) {
+  searchInput.disabled = false;
+  searchBtn.disabled   = false;
+  document.getElementById('searchProgress').style.display = 'none';
+  document.getElementById('searchResults').style.display  = 'block';
+  if (ok) {
+    searchResults.innerHTML = '<div class="search-hint">✓ Đã xử lý xong! Tìm bài khác hoặc nhấn Play bên dưới.</div>';
+  }
+}
+
+function setSearchPct(pct, stepLabel) {
+  document.getElementById('searchProgressFill').style.width = pct + '%';
+  document.getElementById('searchProgressPct').textContent  = pct + '%';
+  document.getElementById('searchProgressStep').textContent = stepLabel || '';
+}
+
 async function useYouTube(url, title) {
+  freezeSearch(title);
   const { task_id } = await fetch('/api/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, title }),
   }).then(r => r.json());
-  showStatus('Downloading from YouTube…');
-  pollStatus(task_id);
+  pollStatus(task_id, { onStep: setSearchPct, onDone: () => unfreezeSearch(true), onErr: () => unfreezeSearch(false) });
 }
 
 async function useSoundCloud(url, title) {
+  freezeSearch(title);
   const { task_id } = await fetch('/api/download-soundcloud', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, title }),
   }).then(r => r.json());
-  showStatus('Downloading from SoundCloud…');
-  pollStatus(task_id);
+  pollStatus(task_id, { onStep: setSearchPct, onDone: () => unfreezeSearch(true), onErr: () => unfreezeSearch(false) });
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
@@ -637,12 +726,35 @@ dropZone.addEventListener('drop', e => {
   if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]);
 });
 
+function freezeUpload(filename) {
+  dropZone.style.display = 'none';
+  const prog = document.getElementById('uploadProgress');
+  prog.style.display = 'block';
+  document.getElementById('uploadProgressLabel').textContent = `🎵 "${filename}"`;
+  setUploadPct(0, 'Đang chuẩn bị…');
+}
+
+function unfreezeUpload(ok) {
+  document.getElementById('uploadProgress').style.display = 'none';
+  dropZone.style.display = '';
+}
+
+function setUploadPct(pct, stepLabel) {
+  document.getElementById('uploadProgressFill').style.width = pct + '%';
+  document.getElementById('uploadProgressPct').textContent  = pct + '%';
+  document.getElementById('uploadProgressStep').textContent = stepLabel || '';
+}
+
 async function processFile(file) {
-  showStatus(`Uploading ${file.name}…`);
+  freezeUpload(file.name);
   const form = new FormData();
   form.append('file', file);
   const { task_id } = await fetch('/upload', { method: 'POST', body: form }).then(r => r.json());
-  pollStatus(task_id);
+  pollStatus(task_id, {
+    onStep: setUploadPct,
+    onDone: () => { setUploadPct(100, '✓ Hoàn tất!'); setTimeout(() => unfreezeUpload(true), 800); },
+    onErr:  () => unfreezeUpload(false),
+  });
 }
 
 // ─── Status & polling ─────────────────────────────────────────────────────────
@@ -652,6 +764,7 @@ const spinner    = document.getElementById('spinner');
 const playNew    = document.getElementById('playNew');
 
 function showStatus(text, type = 'loading', file = null) {
+  if (!statusEl) return;
   statusEl.classList.add('show');
   statusText.textContent = text;
   statusText.className = type === 'ok' ? 'ok' : type === 'err' ? 'err' : '';
@@ -665,48 +778,55 @@ function showStatus(text, type = 'loading', file = null) {
   }
 }
 
-async function pollStatus(task_id) {
+async function pollStatus(task_id, callbacks = {}) {
+  const { onStep, onDone, onErr } = callbacks;
   while (true) {
     await new Promise(r => setTimeout(r, 1000));
     const s = await fetch(`/status/${task_id}`).then(r => r.json());
-    if (s.step && s.status === 'processing') showStatus(s.step);
+    if (s.step && s.status === 'processing') {
+      showStatus(s.step);
+      if (onStep) onStep(stepToPct(s.step), s.step);
+    }
     if (s.status === 'done') {
+      if (onStep) onStep(100, '✓ Hoàn tất!');
       showStatus(
         `✓ ${s.file}  ·  Key: ${s.key}  ·  ${s.notes} notes  ·  avg. ${s.median_duration}s/note`,
         'ok', s.file
       );
       loadFiles();
+      if (onDone) setTimeout(onDone, 800);
       break;
     }
-    if (s.status === 'error') { showStatus(`Error: ${s.error}`, 'err'); break; }
+    if (s.status === 'error') {
+      showStatus(`Error: ${s.error}`, 'err');
+      if (onErr) onErr();
+      break;
+    }
   }
 }
 
 // ─── File list ────────────────────────────────────────────────────────────────
 const fileList = document.getElementById('fileList');
 
-function songName(filename) {
-  return filename
-    .replace(/_processed\.mid$/i, '')
-    .replace(/_transposed/gi, '')
-    .replace(/_RH/gi, '')
+function songName(stem) {
+  return stem
+    .replace(/_[0-9a-f]{8}$/i, '')   // strip trailing 8-char task ID (e.g. _a1b2c3d4)
     .replace(/_/g, ' ')
     .trim()
-    .replace(/\b\w/g, c => c.toUpperCase()) || filename;
+    .replace(/\b\w/g, c => c.toUpperCase()) || stem;
 }
 
 async function loadFiles() {
-  const { files } = await fetch('/api/files').then(r => r.json());
-  const processed = files.filter(f => f.name.endsWith('_processed.mid'));
-  if (!processed.length) {
+  const { songs } = await fetch('/api/files').then(r => r.json());
+  if (!songs || !songs.length) {
     fileList.innerHTML = '<div class="empty">No songs yet — search or upload a song to begin.</div>';
     return;
   }
-  fileList.innerHTML = processed.map(f => `
+  fileList.innerHTML = songs.map(s => `
     <div class="file-item">
       <div class="file-dot"></div>
-      <span class="file-name">${songName(f.name)}</span>
-      <button class="btn-play" onclick="playFile('${escAttr(f.name)}')">▶ Play</button>
+      <span class="file-name">${songName(s.stem)}</span>
+      <button class="btn-play" onclick="playFile('${escAttr(s.rh || s.lh)}')">▶ Play</button>
     </div>
   `).join('');
 }

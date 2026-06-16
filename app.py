@@ -241,12 +241,18 @@ g_wait_started_at   = 0.0        # loop wall-clock time when WAITING began
 g_feedback_cache: dict | None = None
 g_feedback_future: asyncio.Future | None = None
 
+# Test mode (no hints, auto-advance, records user presses for LLM scoring)
+g_test_mode:    bool = False
+g_test_presses: list = []   # [(game_time_float, pitch_int)]
+g_lh_notes:     list = []   # raw notes from LH file, used for auto-play in test mode
+
 
 def _reset_game(path: str) -> None:
     global notes_data, groups, g_time, g_status, g_idx, g_score, g_hit
     global g_wrong_notes, g_section_mistakes, g_section_hit_times
     global g_last_wrong, g_last_wrong_at, g_current_song, g_current_path
     global g_wait_started_at, g_feedback_cache, g_feedback_future
+    global g_test_mode, g_test_presses, g_lh_notes
 
     g_current_path = path
 
@@ -292,6 +298,9 @@ def _reset_game(path: str) -> None:
     g_wait_started_at   = 0.0
     g_feedback_cache    = None
     g_feedback_future   = None
+    g_test_mode         = False
+    g_test_presses      = []
+    g_lh_notes          = []
 
     g_current_song = song_stem
 
@@ -688,10 +697,47 @@ async def get_notes():
 
 @app.get("/api/files")
 async def list_files():
-    files = sorted(ARTIFACT_DIR.glob("*.mid"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return JSONResponse({
-        "files": [{"name": f.name, "size": f.stat().st_size} for f in files]
-    })
+    """Return songs grouped by stem — one entry per song, with rh/lh file pointers."""
+    processed = sorted(
+        ARTIFACT_DIR.glob("*_processed.mid"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    songs: dict = {}
+    for f in processed:
+        stem = f.stem  # e.g. "MySong_RH_processed"
+        # Skip piece files (e.g. MySong_RH_processed_piece0)
+        if re.search(r'_piece\d+$', stem):
+            continue
+        song_stem = stem
+        is_rh = False
+        is_lh = False
+        if song_stem.endswith('_RH_processed'):
+            song_stem = song_stem[:-len('_RH_processed')]
+            is_rh = True
+        elif song_stem.endswith('_LH_processed'):
+            song_stem = song_stem[:-len('_LH_processed')]
+            is_lh = True
+        elif song_stem.endswith('_processed'):
+            song_stem = song_stem[:-len('_processed')]
+            is_rh = True
+        mtime = f.stat().st_mtime
+        if song_stem not in songs:
+            songs[song_stem] = {'stem': song_stem, 'rh': None, 'lh': None, '_mtime': mtime}
+        else:
+            songs[song_stem]['_mtime'] = max(songs[song_stem]['_mtime'], mtime)
+        if is_rh:
+            songs[song_stem]['rh'] = f.name
+        elif is_lh:
+            songs[song_stem]['lh'] = f.name
+    result = sorted(
+        [v for v in songs.values() if v['rh'] or v['lh']],
+        key=lambda x: x['_mtime'],
+        reverse=True,
+    )
+    for s in result:
+        del s['_mtime']
+    return JSONResponse({"songs": result})
 
 
 class LoadRequest(BaseModel):
@@ -1018,7 +1064,10 @@ def _compute_pieces(midi_path: str) -> list:
         return []
     times = sorted(df['grouped_time'].unique())
     n_groups = len(times)
-    n_pieces = max(2, min(10, round(n_groups / 20)))
+    total_dur = float(times[-1] - times[0]) if n_groups > 1 else 0
+    # Target ~45 s per piece so each section feels substantial; clamp to 2–6 pieces.
+    # All note groups are always covered — the last piece extends to n_groups.
+    n_pieces = max(2, min(6, round(total_dur / 45))) if total_dur > 0 else 3
     chunk = max(1, n_groups // n_pieces)
     pieces = []
     for i in range(n_pieces):
@@ -1082,6 +1131,139 @@ async def load_piece_route(req: LoadPieceRequest):
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
+class TestModeRequest(BaseModel):
+    enabled: bool = True
+
+
+def _generate_test_feedback(group_results: list, accuracy: float, song: str) -> dict:
+    n_groups  = len(group_results)
+    n_correct = sum(1 for g in group_results if g['ok'])
+    n_missed  = sum(len(g['missed']) for g in group_results)
+    n_extra   = sum(len(g['extra'])  for g in group_results)
+
+    bad_groups = sorted(
+        [g for g in group_results if not g['ok']],
+        key=lambda x: len(x['missed']) + len(x['extra']),
+        reverse=True,
+    )[:5]
+    bad_desc = []
+    for g in bad_groups:
+        parts = []
+        if g['missed']: parts.append(f"thiếu {'+'.join(_pitch_name(p) for p in g['missed'])}")
+        if g['extra']:  parts.append(f"thừa {'+'.join(_pitch_name(p) for p in g['extra'])}")
+        bad_desc.append(f"t={g['time']}s: {', '.join(parts)}")
+
+    prompt = (
+        f'Bài: "{song}" | Kết quả: {n_correct}/{n_groups} nhóm nốt đúng ({accuracy:.0%})\n'
+        f'Tổng nốt thiếu: {n_missed} | Tổng nốt thừa (sai): {n_extra}\n'
+        f'Đoạn sai nhiều nhất: {"; ".join(bad_desc) or "không có"}\n\n'
+        'Trả về JSON (tất cả giá trị là string hoặc array of string):\n'
+        '{"score": <số nguyên 0-100>, "feedback": "nhận xét ngắn một đoạn",'
+        '"weak_points": ["điểm yếu 1","điểm yếu 2"],'
+        '"practice_tips": ["gợi ý 1","gợi ý 2"]}'
+    )
+    resp = _llm.chat.completions.create(
+        model=_llm_model,
+        messages=[
+            {"role": "system", "content": "/no_thinking"},
+            {"role": "user",   "content": prompt},
+        ],
+        max_tokens=400, temperature=0.3, timeout=15,
+    )
+    text = (resp.choices[0].message.content or '').strip()
+    try:
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        result = json.loads(match.group() if match else text)
+    except Exception:
+        result = {
+            "score": round(accuracy * 100),
+            "feedback": f"Hoàn thành bài kiểm tra: {n_correct}/{n_groups} nhóm nốt chính xác.",
+            "weak_points": [],
+            "practice_tips": ["Luyện lại các đoạn chưa đúng với tốc độ chậm hơn."],
+        }
+    result.setdefault("score", round(accuracy * 100))
+    result.setdefault("feedback", "")
+    result.setdefault("weak_points", [])
+    result.setdefault("practice_tips", [])
+    if isinstance(result.get("score"), str):
+        try: result["score"] = int(result["score"])
+        except: result["score"] = round(accuracy * 100)
+    return result
+
+
+@app.post("/set-test-mode")
+async def set_test_mode_route(req: TestModeRequest):
+    global g_test_mode, g_test_presses, g_lh_notes
+    g_test_mode    = req.enabled
+    g_test_presses = []
+    g_lh_notes     = []
+    if req.enabled and g_current_song:
+        lh_path = ARTIFACT_DIR / f"{g_current_song}_LH_processed.mid"
+        if not _file_exists(lh_path):
+            lh_path = ARTIFACT_DIR / f"{g_current_song}_LH.mid"
+        if _file_exists(lh_path):
+            g_lh_notes = _load_notes(str(lh_path))
+    return JSONResponse({"ok": True, "test_mode": g_test_mode, "has_lh": bool(g_lh_notes)})
+
+
+@app.get("/test-result")
+async def get_test_result():
+    if not groups:
+        return JSONResponse({"error": "No song loaded"}, status_code=400)
+
+    WINDOW = 0.6   # seconds around each note group to match user presses
+    group_results = []
+    total_correct = 0
+    for grp in groups:
+        expected = set(n['pitch'] for n in grp['notes'])
+        t = grp['time']
+        pressed = set(
+            pitch for (pt, pitch) in g_test_presses
+            if abs(pt - t) <= WINDOW
+        )
+        correct = expected & pressed
+        missed  = expected - pressed
+        extra   = pressed  - expected
+        ok      = not missed and not extra
+        if ok:
+            total_correct += 1
+        group_results.append({
+            'index':    grp.get('index', 0),
+            'time':     round(t, 2),
+            'expected': sorted(expected),
+            'pressed':  sorted(pressed),
+            'correct':  sorted(correct),
+            'missed':   sorted(missed),
+            'extra':    sorted(extra),
+            'ok':       ok,
+        })
+
+    accuracy = total_correct / len(groups) if groups else 0.0
+
+    ai = None
+    if _llm:
+        try:
+            ai = await asyncio.to_thread(
+                _generate_test_feedback, group_results, accuracy, g_current_song
+            )
+        except Exception as e:
+            ai = {"score": round(accuracy * 100), "feedback": str(e),
+                  "weak_points": [], "practice_tips": []}
+    else:
+        ai = {
+            "score": round(accuracy * 100),
+            "feedback": f"{total_correct}/{len(groups)} nhóm nốt chính xác.",
+            "weak_points": [], "practice_tips": [],
+        }
+
+    return JSONResponse({
+        "total_groups": len(groups),
+        "correct":      total_correct,
+        "accuracy":     round(accuracy, 4),
+        "ai":           ai,
+    })
+
+
 # ─── WebSocket ────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
@@ -1136,6 +1318,11 @@ async def game_loop():
             except queue.Empty:
                 break
 
+        # In test mode: record every key press with its game timestamp
+        if g_test_mode:
+            for p in new_presses:
+                g_test_presses.append((g_time, p))
+
         # ── State machine ──────────────────────────────────────────────────────
         if g_status == 'PLAYING':
             g_time += dt * g_tempo          # tempo scaling
@@ -1143,10 +1330,18 @@ async def game_loop():
                 g_status = 'FINISHED'
                 _start_feedback_precompute()
             elif g_time >= groups[g_idx]['time']:
-                g_time          = groups[g_idx]['time']
-                g_status        = 'WAITING'
-                g_hit           = set()
-                g_wait_started_at = now
+                if g_test_mode:
+                    # Auto-advance: don't pause, keep the music rolling
+                    while g_idx < len(groups) and g_time >= groups[g_idx]['time']:
+                        g_idx += 1
+                    if g_idx >= len(groups):
+                        g_status = 'FINISHED'
+                        _start_feedback_precompute()
+                else:
+                    g_time          = groups[g_idx]['time']
+                    g_status        = 'WAITING'
+                    g_hit           = set()
+                    g_wait_started_at = now
 
         elif g_status == 'WAITING':
             required = {n['pitch'] for n in groups[g_idx]['notes']}
@@ -1197,6 +1392,12 @@ async def game_loop():
 
         show_wrong = (now - g_last_wrong_at) < 2.0
 
+        # LH auto-play for test mode: which LH pitches are sounding right now
+        lh_auto = (
+            [n['pitch'] for n in g_lh_notes if n['start'] <= g_time <= n['end']]
+            if g_test_mode and g_lh_notes else []
+        )
+
         payload = json.dumps({
             'type':             'state',
             'game_time':        g_time,
@@ -1212,6 +1413,8 @@ async def game_loop():
             'suggest_slow':     cur_mistakes >= 3 and g_status == 'WAITING',
             'tempo':            g_tempo,
             'hand':             g_hand,
+            'test_mode':        g_test_mode,
+            'lh_auto':          lh_auto,
         })
 
         if clients:

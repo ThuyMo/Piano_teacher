@@ -348,6 +348,73 @@
       transition: background .15s;
     }
     .overlay-actions a:hover { background: #1e1e30; color: #aaaadd; }
+
+    /* ── Next-step suggestion box ─────────────────────────────────────────── */
+    #nextStepBox {
+      background: linear-gradient(135deg, #0a1a0a 0%, #0d1520 100%);
+      border: 1px solid #1e3020;
+      border-radius: 14px;
+      padding: 18px 20px;
+      margin-bottom: 18px;
+    }
+    .next-step-label {
+      color: #50f078;
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      font-weight: bold;
+      margin-bottom: 12px;
+    }
+    .next-step-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .btn-next-piece {
+      background: linear-gradient(135deg, #1a4a1a, #2a6a2a);
+      color: #88ff88;
+      border: 1px solid #2a5a2a;
+      border-radius: 10px;
+      padding: 12px 22px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all .15s;
+      flex: 1 1 auto;
+    }
+    .btn-next-piece:hover { background: linear-gradient(135deg, #256625, #35853b); color: #aaffaa; }
+    .btn-next-piece:disabled { opacity: .5; cursor: wait; }
+    .btn-next-full {
+      background: linear-gradient(135deg, #1a1040, #2a1860);
+      color: #b89eff;
+      border: 1px solid #332060;
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .btn-next-full:hover { background: linear-gradient(135deg, #221450, #351c78); color: #ccbbff; }
+    .btn-next-full:disabled { opacity: .5; cursor: wait; }
+    .btn-next-test {
+      background: linear-gradient(135deg, #2a1800, #442800);
+      color: #ffcc55;
+      border: 1px solid #553300;
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .btn-next-test:hover { background: linear-gradient(135deg, #3a2200, #5a3800); color: #ffe088; }
+    .btn-next-test:disabled { opacity: .5; cursor: wait; }
+    .btn-next-new {
+      background: #12121a;
+      color: #7788bb;
+      border: 1px solid #252540;
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .btn-next-new:hover { background: #1e1e30; color: #aabbdd; }
   </style>
 </head>
 <body>
@@ -367,7 +434,7 @@
       <button class="btn-ctrl active" data-tempo="1.0">100%</button>
     </div>
     <button id="restartBtn">↺ Bắt đầu lại</button>
-    <a id="backBtn" href="/">← Dashboard</a>
+    <a id="backBtn" href="/">← Quay lại</a>
   </div>
 
   <canvas id="game"></canvas>
@@ -408,8 +475,8 @@
     <div style="font-size:48px">🎵</div>
     <div style="color:#eeeeff;font-size:22px;font-weight:bold">Chưa có bài nhạc nào</div>
     <div style="color:#44445a;font-size:14px">Vào Dashboard để tải hoặc chọn một bài trước</div>
-    <a href="/" style="background:#5096ff;color:#fff;border:none;border-radius:8px;
-       padding:12px 28px;font-size:15px;cursor:pointer;text-decoration:none">← Về Dashboard</a>
+    <a id="noSongLink" href="/" style="background:#5096ff;color:#fff;border:none;border-radius:8px;
+       padding:12px 28px;font-size:15px;cursor:pointer;text-decoration:none">← Quay lại</a>
   </div>
 
   <!-- Confetti canvas (appears briefly on finish) -->
@@ -417,6 +484,49 @@
     position:fixed;inset:0;width:100%;height:100%;
     pointer-events:none;z-index:60;display:none;
   "></canvas>
+
+  <!-- Test-mode result overlay -->
+  <div id="testOverlay" style="
+    display:none; position:fixed; inset:0;
+    background:rgba(10,10,18,.9);
+    align-items:center; justify-content:center;
+    z-index:25; overflow-y:auto; padding:20px;
+  ">
+    <div class="overlay-card">
+      <div class="finish-header">
+        <div class="finish-emoji">📝</div>
+        <h2 style="color:#a78bfa">Kết quả kiểm tra</h2>
+      </div>
+      <div id="testScoreDisplay" style="
+        text-align:center; color:#aaaacc; font-size:15px;
+        margin-bottom:20px; line-height:1.8;
+      "></div>
+
+      <div class="ai-section">
+        <div class="section-label">✨ Nhận xét</div>
+        <p id="testFeedback">
+          <span class="ai-loading">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          </span>
+        </p>
+      </div>
+
+      <div id="testWeakBox" style="display:none; background:#1a1008; border-radius:10px; padding:14px 18px; margin-bottom:12px;">
+        <div class="section-label" style="color:#fbbf24; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin-bottom:8px; font-weight:bold;">⚠ Cần cải thiện</div>
+        <ul id="testWeakList" style="color:#d4a76a; font-size:14px; line-height:1.8; padding-left:18px;"></ul>
+      </div>
+
+      <div id="testTipsBox" style="display:none; background:#0e1a0e; border-radius:10px; padding:14px 18px; margin-bottom:18px;">
+        <div class="section-label" style="color:#50f078; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin-bottom:8px; font-weight:bold;">🎯 Gợi ý luyện tập</div>
+        <ul id="testTipsList" style="color:#ccddcc; font-size:14px; line-height:1.8; padding-left:18px;"></ul>
+      </div>
+
+      <div class="overlay-actions">
+        <button onclick="restartTest()">↺ Kiểm tra lại</button>
+        <a id="testBackBtn" href="/">← Quay lại</a>
+      </div>
+    </div>
+  </div>
 
   <!-- Finished overlay with AI feedback -->
   <div id="finishedOverlay">
@@ -446,9 +556,15 @@
         <div class="recs-list" id="recsList"></div>
       </div>
 
+      <!-- Next-step suggestion: shown after finishing a piece from learning path -->
+      <div id="nextStepBox" style="display:none">
+        <div class="next-step-label">🚀 Tiếp theo</div>
+        <div class="next-step-actions" id="nextStepActions"></div>
+      </div>
+
       <div class="overlay-actions">
         <button onclick="restartFromOverlay()">↺ Luyện lại</button>
-        <a href="/">← Dashboard</a>
+        <a id="finishedBackBtn" href="/">← Quay lại</a>
       </div>
     </div>
   </div>
@@ -497,7 +613,14 @@ let serverStamp = 0;
 let gameStatus  = 'LOADING';
 let score = 0, total = 0;
 let activeNotes = [], waitPitches = [], hitPitches = [];
-let finishedHandled = false;
+// ─── Learning-path URL params ─────────────────────────────────────────────────
+const _qp     = new URLSearchParams(location.search);
+const lpReturn  = _qp.get('return') || '/';
+const lpFile    = _qp.get('file')   || '';
+const lpPiece   = _qp.get('piece') != null ? parseInt(_qp.get('piece')) : null;
+const lpTotal   = _qp.get('total') != null ? parseInt(_qp.get('total')) : null;
+const isFromLP  = lpReturn !== '/';
+const testMode  = _qp.get('mode') === 'test';
 
 // Teacher-agent state
 let wrongNote       = null;       // {pressed, required, finger, hand}
@@ -508,6 +631,7 @@ let prevSuggestSlow = false;      // edge-detect: show toast only on false→tru
 let currentTempo    = 1.0;
 let currentHand     = 'RH';
 let finishedShown   = false;
+let lhAutoNotes     = new Set();  // pitches currently auto-playing (LH test mode)
 
 function liveGameTime() {
   if (gameStatus !== 'PLAYING') return serverTime;
@@ -710,9 +834,97 @@ function hideFinished() {
 }
 
 function restartFromOverlay() {
+  document.getElementById('nextStepBox').style.display = 'none';
   hideFinished();
   finishedShown = false;
   post('/restart');
+}
+
+// ─── Next-step suggestions after finishing a piece ────────────────────────────
+function showNextStepSuggestion() {
+  const box     = document.getElementById('nextStepBox');
+  const actions = document.getElementById('nextStepActions');
+  if (!lpFile || lpPiece === null || lpTotal === null) return;
+
+  const isLastPiece = lpPiece >= lpTotal - 1;
+  const retEnc      = encodeURIComponent(lpReturn);
+
+  if (!isLastPiece) {
+    // Mid-song: suggest next part
+    actions.innerHTML = `
+      <button class="btn-next-piece" id="btnNextPiece" onclick="goNextPiece()">
+        ▶ Part ${lpPiece + 2} / ${lpTotal} — Tiếp tục luyện
+      </button>`;
+  } else {
+    // Last part: suggest full song / test / new song
+    actions.innerHTML = `
+      <button class="btn-next-full" id="btnNextFull" onclick="goFullSong()">🎼 Luyện full bài</button>
+      <button class="btn-next-test" id="btnNextTest" onclick="goTest()">📝 Kiểm tra</button>
+      <button class="btn-next-new"  onclick="goNewSong()">🎵 Bài mới</button>`;
+  }
+
+  box.style.display = 'block';
+}
+
+async function goNextPiece() {
+  const btn = document.getElementById('btnNextPiece');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tải…'; }
+  try {
+    const res  = await fetch('/api/load_piece', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: lpFile, piece_index: lpPiece + 1, total_pieces: lpTotal }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const retEnc = encodeURIComponent(lpReturn);
+    window.location.href = `/game?file=${encodeURIComponent(lpFile)}&piece=${lpPiece + 1}&total=${lpTotal}&return=${retEnc}`;
+  } catch (e) {
+    alert(`Lỗi: ${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = `▶ Part ${lpPiece + 2} — Tiếp tục luyện`; }
+  }
+}
+
+async function goFullSong() {
+  const btn = document.getElementById('btnNextFull');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tải…'; }
+  try {
+    const res  = await fetch('/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: lpFile, hand: 'RH' }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const retEnc = encodeURIComponent(lpReturn);
+    window.location.href = `/game?file=${encodeURIComponent(lpFile)}&return=${retEnc}`;
+  } catch (e) {
+    alert(`Lỗi: ${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = '🎼 Luyện full bài'; }
+  }
+}
+
+async function goTest() {
+  const btn = document.getElementById('btnNextTest');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tải…'; }
+  try {
+    const res  = await fetch('/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: lpFile, hand: 'RH' }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const retEnc = encodeURIComponent(lpReturn);
+    window.location.href = `/game?file=${encodeURIComponent(lpFile)}&mode=test&return=${retEnc}`;
+  } catch (e) {
+    alert(`Lỗi: ${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = '📝 Kiểm tra'; }
+  }
+}
+
+function goNewSong() {
+  window.location.href = '/';
 }
 
 function renderFeedback(data) {
@@ -756,6 +968,58 @@ function searchSong(name) {
   window.location.href = '/';
 }
 
+// ─── Test mode overlay ────────────────────────────────────────────────────────
+function showTestOverlay() {
+  document.getElementById('testOverlay').style.display = 'flex';
+}
+
+async function loadTestResult() {
+  try {
+    const data = await fetch('/test-result').then(r => r.json());
+    renderTestResult(data);
+  } catch (e) {
+    document.getElementById('testFeedback').textContent = 'Không thể tải kết quả.';
+  }
+}
+
+function renderTestResult(data) {
+  const ai       = data.ai || {};
+  const testScore = ai.score ?? Math.round((data.accuracy || 0) * 100);
+  const pct       = Math.round((data.accuracy || 0) * 100);
+  const star      = pct >= 90 ? '⭐⭐⭐' : pct >= 70 ? '⭐⭐' : '⭐';
+
+  document.getElementById('testScoreDisplay').innerHTML =
+    `<span class="score-big" style="color:#a78bfa">${testScore}</span>` +
+    `<span style="color:#6666aa">/100</span> ${star}<br>` +
+    `<span style="font-size:13px; color:#555577">${data.correct}/${data.total_groups} nhóm nốt chính xác · ${pct}%</span>`;
+
+  document.getElementById('testFeedback').textContent =
+    ai.feedback || `${data.correct}/${data.total_groups} nhóm nốt chính xác.`;
+
+  if (ai.weak_points && ai.weak_points.length) {
+    document.getElementById('testWeakList').innerHTML =
+      ai.weak_points.map(w => `<li>${w}</li>`).join('');
+    document.getElementById('testWeakBox').style.display = 'block';
+  }
+
+  if (ai.practice_tips && ai.practice_tips.length) {
+    document.getElementById('testTipsList').innerHTML =
+      ai.practice_tips.map(t => `<li>${t}</li>`).join('');
+    document.getElementById('testTipsBox').style.display = 'block';
+  }
+}
+
+async function restartTest() {
+  document.getElementById('testOverlay').style.display = 'none';
+  finishedShown = false;
+  document.getElementById('testWeakBox').style.display  = 'none';
+  document.getElementById('testTipsBox').style.display  = 'none';
+  document.getElementById('testFeedback').innerHTML =
+    '<span class="ai-loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>';
+  await post('/restart');
+  await post('/set-test-mode', { enabled: true });
+}
+
 // ─── Controls wiring ──────────────────────────────────────────────────────────
 document.querySelectorAll('[data-hand]').forEach(btn => {
   btn.addEventListener('click', () => setHandOnServer(btn.dataset.hand));
@@ -774,6 +1038,21 @@ let ws         = null;
 let midiStatus = 'MIDI: not connected';
 
 async function init() {
+  // Wire all back-navigation links to lpReturn (learning path or dashboard)
+  document.getElementById('backBtn').href         = lpReturn;
+  document.getElementById('noSongLink').href      = lpReturn;
+  document.getElementById('finishedBackBtn').href = lpReturn;
+  document.getElementById('testBackBtn').href     = lpReturn;
+
+  // Enable test mode on the server before the first note arrives
+  if (testMode) {
+    await post('/set-test-mode', { enabled: true });
+    // Pre-enable sound so LH auto-play fires as soon as audio context is available
+    soundEnabled = true;
+    soundToggle.textContent = 'Sound on';
+    soundToggle.classList.add('on');
+  }
+
   const res  = await fetch('/notes');
   const data = await res.json();
   allNotes = data.notes;
@@ -817,37 +1096,64 @@ async function init() {
     sectionMistakes = msg.section_mistakes ?? 0;
     suggestSlow     = msg.suggest_slow ?? false;
 
-    if (msg.wrong_note) showWrongNote(msg.wrong_note);
+    // LH auto-play in test mode
+    if (testMode && msg.lh_auto) {
+      const newLh = new Set(msg.lh_auto);
+      for (const p of lhAutoNotes) { if (!newLh.has(p)) stopNote(p); }
+      for (const p of newLh)       { if (!lhAutoNotes.has(p)) playNote(p, 55); }
+      lhAutoNotes = newLh;
+    }
 
-    // Show toast only on false→true edge (not on every frame while still true)
-    if (suggestSlow && !prevSuggestSlow) showRestartToast();
-    // Reset dismissed flag when section changes (no longer suggesting slow → player moved on)
+    // In test mode: suppress hints and wrong-note panel
+    if (!testMode && msg.wrong_note) showWrongNote(msg.wrong_note);
+    if (!testMode && suggestSlow && !prevSuggestSlow) showRestartToast();
     if (!suggestSlow && prevSuggestSlow) { toastDismissed = false; }
     prevSuggestSlow = suggestSlow;
 
     // Finished overlay (show once)
     if (gameStatus === 'FINISHED' && !finishedShown) {
       finishedShown = true;
-      const pct = total ? Math.round(score / total * 100) : 0;
-      const star = pct >= 90 ? '⭐⭐⭐' : pct >= 60 ? '⭐⭐' : '⭐';
-      document.getElementById('scoreDisplay').innerHTML =
-        `<span class="score-big">${score} / ${total}</span> nốt đúng &nbsp;` +
-        `<span class="score-pct">${pct}%</span> ${star}<br>` +
-        `<small style="color:#555577">Tay: ${handLabel(currentHand)} · Tốc độ: ${Math.round(currentTempo*100)}%</small>`;
-      document.getElementById('nextPracticeBox').style.display  = 'none';
-      document.getElementById('recsSection').style.display      = 'none';
+      // Stop any lingering LH auto-play notes
+      for (const p of lhAutoNotes) stopNote(p);
+      lhAutoNotes = new Set();
       playApplause();
       launchConfetti();
-      showFinished();
-      loadSessionFeedback();
-    }
-  };
+
+      if (testMode) {
+        // ── Test mode: show test result overlay ──────────────────────────────
+        showTestOverlay();
+        loadTestResult();
+      } else {
+        // ── Normal mode: show AI feedback overlay ────────────────────────────
+        // Save piece progress to localStorage when finishing a piece from learning path
+        if (lpFile && lpPiece !== null) {
+          const key  = `piano_progress_${lpFile}`;
+          const done = new Set(JSON.parse(localStorage.getItem(key) || '[]'));
+          done.add(lpPiece);
+          localStorage.setItem(key, JSON.stringify([...done]));
+        }
+
+        const pct = total ? Math.round(score / total * 100) : 0;
+        const star = pct >= 90 ? '⭐⭐⭐' : pct >= 60 ? '⭐⭐' : '⭐';
+        document.getElementById('scoreDisplay').innerHTML =
+          `<span class="score-big">${score} / ${total}</span> nốt đúng &nbsp;` +
+          `<span class="score-pct">${pct}%</span> ${star}<br>` +
+          `<small style="color:#555577">Tay: ${handLabel(currentHand)} · Tốc độ: ${Math.round(currentTempo*100)}%</small>`;
+        document.getElementById('nextPracticeBox').style.display  = 'none';
+        document.getElementById('recsSection').style.display      = 'none';
+        document.getElementById('nextStepBox').style.display      = 'none';
+        showFinished();
+        loadSessionFeedback();
+        showNextStepSuggestion();
+      }   // end else (normal mode)
+    }   // end if FINISHED
+  };   // end ws.onmessage
 }
 
 // ─── Browser audio ────────────────────────────────────────────────────────────
 let audioCtx   = null;
 let masterGain = null;
-let soundEnabled     = false;
+let soundEnabled     = true;
 const soundingNotes  = new Map();
 
 function midiToHz(p) { return 440 * Math.pow(2, (p - 69) / 12); }
@@ -1175,21 +1481,6 @@ function render() {
   }
 
   requestAnimationFrame(render);
-}
-
-function onPieceFinished() {
-  if (lpFile && lpPiece !== null) {
-    const key  = `piano_progress_${lpFile}`;
-    const done = new Set(JSON.parse(localStorage.getItem(key) || '[]'));
-    done.add(lpPiece);
-    localStorage.setItem(key, JSON.stringify([...done]));
-  }
-  const overlay = document.getElementById('finishOverlay');
-  document.getElementById('finishScore').textContent = `Score: ${score} / ${total}`;
-  overlay.style.display = 'flex';
-  document.getElementById('btnBackLearning').onclick = () => {
-    window.location.href = decodeURIComponent(lpReturn);
-  };
 }
 
 init().then(() => requestAnimationFrame(render));

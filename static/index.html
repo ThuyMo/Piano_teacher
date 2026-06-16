@@ -507,6 +507,7 @@ let serverStamp = 0;
 let gameStatus  = 'LOADING';
 let score = 0, total = 0;
 let activeNotes = [], waitPitches = [], hitPitches = [];
+let finishedHandled = false;
 
 // Teacher-agent state
 let wrongNote       = null;       // {pressed, required, finger, hand}
@@ -1183,6 +1184,21 @@ function render() {
   }
 
   requestAnimationFrame(render);
+}
+
+function onPieceFinished() {
+  if (lpFile && lpPiece !== null) {
+    const key  = `piano_progress_${lpFile}`;
+    const done = new Set(JSON.parse(localStorage.getItem(key) || '[]'));
+    done.add(lpPiece);
+    localStorage.setItem(key, JSON.stringify([...done]));
+  }
+  const overlay = document.getElementById('finishOverlay');
+  document.getElementById('finishScore').textContent = `Score: ${score} / ${total}`;
+  overlay.style.display = 'flex';
+  document.getElementById('btnBackLearning').onclick = () => {
+    window.location.href = decodeURIComponent(lpReturn);
+  };
 }
 
 init().then(() => requestAnimationFrame(render));

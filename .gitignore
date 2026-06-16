@@ -1,23 +1,23 @@
-# # Python
-# __pycache__/
-# *.py[cod]
-# *.pyo
-# .venv/
-# venv/
-# env/
-# *.egg-info/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
 
-# # Generated artifacts & uploads (large binary files)
-# artifact/
-# uploads/
+# Generated artifacts & uploads (large binary files)
+artifact/
+uploads/
 
-# # Jupyter
-# .ipynb_checkpoints/
+# Jupyter
+.ipynb_checkpoints/
 
-# # OS
-# .DS_Store
-# .greennode.json
-# .env
-# .agentbase/
-# .claude/
+# OS
+.DS_Store
+.greennode.json
+.env
+.agentbase/
+.claude/
 .agentbase/

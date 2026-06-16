@@ -200,7 +200,8 @@
       box-shadow: 0 5px 16px rgba(168,85,247,0.35);
     }
 
-    /* ── Upload card ── */
+    /* ── Input cards ── */
+    .song-card,
     .upload-card {
       border: 2px dashed #d4bfee;
       border-radius: 14px;
@@ -572,7 +573,7 @@ function showStatus(text, type = 'loading', file = null) {
 
 async function pollStatus(task_id) {
   while (true) {
-    await new Promise(r => setTimeout(r, 2500));
+    await new Promise(r => setTimeout(r, 1000));
     const s = await fetch(`/status/${task_id}`).then(r => r.json());
     if (s.step && s.status === 'processing') showStatus(s.step);
     if (s.status === 'done') {

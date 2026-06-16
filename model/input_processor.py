@@ -20,12 +20,17 @@ def _resolve_executable(name: str) -> str:
     )
 
 
-def convert_audio_to_midi(input_path: str) -> Path:
+def convert_audio_to_midi(input_path: str, max_seconds: int = 60) -> Path:
     input_path = Path(input_path)
     artifact_dir = Path(__file__).parent.parent / "artifact"
     artifact_dir.mkdir(exist_ok=True)
 
     output_midi = artifact_dir / input_path.with_suffix(".mid").name
+
+    # Skip transkun if MIDI already cached for this audio file
+    if output_midi.exists():
+        return output_midi
+
     ffmpeg = _resolve_executable("ffmpeg")
     transkun = _resolve_executable("transkun")
 
@@ -35,6 +40,7 @@ def convert_audio_to_midi(input_path: str) -> Path:
         ffmpeg_cmd = [
             ffmpeg, "-y",
             "-i", str(input_path),
+            "-t", str(max_seconds),   # chỉ lấy max_seconds đầu — transkun nhanh hơn ~3x
             "-ac", "1",
             "-ar", "44100",
             "-sample_fmt", "s16",

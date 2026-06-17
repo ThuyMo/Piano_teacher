@@ -332,6 +332,12 @@
     </div>
   </div>
 
+
+  <div class="section-label" id="sectionLabel">♩ Song Parts</div>
+  <div class="pieces-grid" id="piecesGrid">
+    <div class="loading-msg">Loading pieces…</div>
+  </div>
+
   <!-- Full-song card -->
   <div class="full-song-card" id="fullSongCard" style="display:none;">
     <div class="full-song-info">
@@ -349,17 +355,15 @@
     </div>
     <button class="btn-play-test" id="btnPlayTest" onclick="playTest()">▶ Bắt đầu kiểm tra</button>
   </div>
-
-  <div class="section-label" id="sectionLabel">♩ Song Parts</div>
-  <div class="pieces-grid" id="piecesGrid">
-    <div class="loading-msg">Loading pieces…</div>
-  </div>
+  
 </div>
 
 <script>
-const params   = new URLSearchParams(location.search);
-const fileName = params.get('file') || '';
+const params    = new URLSearchParams(location.search);
+const fileName  = params.get('file') || '';
 const STORE_KEY = `piano_progress_${fileName}`;
+// Each game session gets a fresh UUID so the server can isolate its state
+const SESSION_ID = crypto.randomUUID();
 
 function getCompleted() {
   try { return new Set(JSON.parse(localStorage.getItem(STORE_KEY) || '[]')); }
@@ -440,12 +444,12 @@ async function playTest() {
     const res  = await fetch('/load', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: fileName, hand: 'RH' }),
+      body: JSON.stringify({ file: fileName, hand: 'RH', session_id: SESSION_ID }),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     const ret = encodeURIComponent(`/learning_path?file=${encodeURIComponent(fileName)}`);
-    window.location.href = `/game?file=${encodeURIComponent(fileName)}&mode=test&return=${ret}`;
+    window.location.href = `/game?session=${SESSION_ID}&file=${encodeURIComponent(fileName)}&mode=test&return=${ret}`;
   } catch (e) {
     alert(`Error: ${e.message}`);
     btn.textContent = '▶ Bắt đầu kiểm tra';
@@ -461,12 +465,12 @@ async function playFullSong() {
     const res  = await fetch('/load', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: fileName, hand: 'RH' }),
+      body: JSON.stringify({ file: fileName, hand: 'RH', session_id: SESSION_ID }),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     const ret = encodeURIComponent(`/learning_path?file=${encodeURIComponent(fileName)}`);
-    window.location.href = `/game?file=${encodeURIComponent(fileName)}&return=${ret}`;
+    window.location.href = `/game?session=${SESSION_ID}&file=${encodeURIComponent(fileName)}&return=${ret}`;
   } catch (e) {
     alert(`Error: ${e.message}`);
     btn.textContent = '▶ Bắt đầu';
@@ -481,12 +485,12 @@ async function playPiece(pieceIndex, totalPieces) {
     const res  = await fetch('/api/load_piece', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: fileName, piece_index: pieceIndex, total_pieces: totalPieces }),
+      body: JSON.stringify({ file: fileName, piece_index: pieceIndex, total_pieces: totalPieces, session_id: SESSION_ID }),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     const ret = encodeURIComponent(`/learning_path?file=${encodeURIComponent(fileName)}`);
-    window.location.href = `/game?file=${encodeURIComponent(fileName)}&piece=${pieceIndex}&total=${totalPieces}&return=${ret}`;
+    window.location.href = `/game?session=${SESSION_ID}&file=${encodeURIComponent(fileName)}&piece=${pieceIndex}&total=${totalPieces}&return=${ret}`;
   } catch (e) {
     alert(`Error: ${e.message}`);
     if (btn) { btn.textContent = '▶ Play'; btn.disabled = false; }

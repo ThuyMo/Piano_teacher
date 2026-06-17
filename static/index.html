@@ -466,7 +466,7 @@
   </div>
 
   <div class="status-row">
-    <button id="soundToggle" type="button">Sound off</button>
+    <button id="soundToggle" type="button">Sound on</button>
     <div id="conn">Connecting to server...</div>
   </div>
 
@@ -570,6 +570,9 @@
   </div>
 
 <script>
+// ─── Session ID — reuse if passed from the loading page, otherwise fresh ──────
+const SESSION_ID = new URLSearchParams(location.search).get('session') || crypto.randomUUID();
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const START_MIDI = 21, END_MIDI = 108;
 const IS_BLACK   = new Set([1, 3, 6, 8, 10]);
@@ -652,7 +655,7 @@ async function post(url, body = {}) {
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ session_id: SESSION_ID, ...body }),
   });
   return r.json();
 }
@@ -669,7 +672,7 @@ async function setHandOnServer(h) {
   updateHandButtons();
   finishedShown = false;
   // Refresh the notes array so the canvas draws the new hand's notes immediately
-  const data = await fetch('/notes').then(r => r.json());
+  const data = await fetch(`/notes?session=${SESSION_ID}`).then(r => r.json());
   allNotes = data.notes;
   total    = data.total;
   // Reset client-side rendering state to avoid stale highlights
@@ -697,7 +700,7 @@ async function setTempoAndRestart(t) {
 
 async function loadSessionFeedback() {
   try {
-    const data = await fetch('/session-feedback').then(r => r.json());
+    const data = await fetch(`/session-feedback?session=${SESSION_ID}`).then(r => r.json());
     renderFeedback(data);
   } catch (e) {
     document.getElementById('aiFeedbackText').textContent =
@@ -870,15 +873,10 @@ async function goNextPiece() {
   const btn = document.getElementById('btnNextPiece');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tải…'; }
   try {
-    const res  = await fetch('/api/load_piece', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: lpFile, piece_index: lpPiece + 1, total_pieces: lpTotal }),
-    });
-    const data = await res.json();
+    const data = await post('/api/load_piece', { file: lpFile, piece_index: lpPiece + 1, total_pieces: lpTotal });
     if (data.error) throw new Error(data.error);
     const retEnc = encodeURIComponent(lpReturn);
-    window.location.href = `/game?file=${encodeURIComponent(lpFile)}&piece=${lpPiece + 1}&total=${lpTotal}&return=${retEnc}`;
+    window.location.href = `/game?session=${SESSION_ID}&file=${encodeURIComponent(lpFile)}&piece=${lpPiece + 1}&total=${lpTotal}&return=${retEnc}`;
   } catch (e) {
     alert(`Lỗi: ${e.message}`);
     if (btn) { btn.disabled = false; btn.textContent = `▶ Part ${lpPiece + 2} — Tiếp tục luyện`; }
@@ -889,15 +887,10 @@ async function goFullSong() {
   const btn = document.getElementById('btnNextFull');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tải…'; }
   try {
-    const res  = await fetch('/load', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: lpFile, hand: 'RH' }),
-    });
-    const data = await res.json();
+    const data = await post('/load', { file: lpFile, hand: 'RH' });
     if (data.error) throw new Error(data.error);
     const retEnc = encodeURIComponent(lpReturn);
-    window.location.href = `/game?file=${encodeURIComponent(lpFile)}&return=${retEnc}`;
+    window.location.href = `/game?session=${SESSION_ID}&file=${encodeURIComponent(lpFile)}&return=${retEnc}`;
   } catch (e) {
     alert(`Lỗi: ${e.message}`);
     if (btn) { btn.disabled = false; btn.textContent = '🎼 Luyện full bài'; }
@@ -908,15 +901,10 @@ async function goTest() {
   const btn = document.getElementById('btnNextTest');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tải…'; }
   try {
-    const res  = await fetch('/load', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: lpFile, hand: 'RH' }),
-    });
-    const data = await res.json();
+    const data = await post('/load', { file: lpFile, hand: 'RH' });
     if (data.error) throw new Error(data.error);
     const retEnc = encodeURIComponent(lpReturn);
-    window.location.href = `/game?file=${encodeURIComponent(lpFile)}&mode=test&return=${retEnc}`;
+    window.location.href = `/game?session=${SESSION_ID}&file=${encodeURIComponent(lpFile)}&mode=test&return=${retEnc}`;
   } catch (e) {
     alert(`Lỗi: ${e.message}`);
     if (btn) { btn.disabled = false; btn.textContent = '📝 Kiểm tra'; }
@@ -924,7 +912,15 @@ async function goTest() {
 }
 
 function goNewSong() {
-  window.location.href = '/';
+  // Derive a clean search query from the current song file name
+  const q = (lpFile || '')
+    .replace(/\.mid$/i, '')
+    .replace(/_(RH|LH)_processed$/i, '')
+    .replace(/_processed$/i, '')
+    .replace(/_[0-9a-f]{8}$/i, '')
+    .replace(/_/g, ' ')
+    .trim();
+  window.location.href = q ? `/?q=${encodeURIComponent(q)}` : '/';
 }
 
 function renderFeedback(data) {
@@ -951,7 +947,7 @@ function renderFeedback(data) {
     if (ai.song_recommendations && ai.song_recommendations.length) {
       const list = document.getElementById('recsList');
       list.innerHTML = ai.song_recommendations.map(s =>
-        `<button class="rec-btn" onclick="searchSong('${s.replace(/'/g,"\\'")}')">🎵 ${s}</button>`
+        `<button class="rec-btn" onclick="window.location.href='/?q='+encodeURIComponent('${s.replace(/'/g,"\\'")}')">🎵 ${s}</button>`
       ).join('');
       document.getElementById('recsSection').style.display = 'block';
     }
@@ -963,10 +959,6 @@ function renderFeedback(data) {
   }
 }
 
-function searchSong(name) {
-  sessionStorage.setItem('searchQuery', name);
-  window.location.href = '/';
-}
 
 // ─── Test mode overlay ────────────────────────────────────────────────────────
 function showTestOverlay() {
@@ -975,7 +967,7 @@ function showTestOverlay() {
 
 async function loadTestResult() {
   try {
-    const data = await fetch('/test-result').then(r => r.json());
+    const data = await fetch(`/test-result?session=${SESSION_ID}`).then(r => r.json());
     renderTestResult(data);
   } catch (e) {
     document.getElementById('testFeedback').textContent = 'Không thể tải kết quả.';
@@ -1053,7 +1045,7 @@ async function init() {
     soundToggle.classList.add('on');
   }
 
-  const res  = await fetch('/notes');
+  const res  = await fetch(`/notes?session=${SESSION_ID}`);
   const data = await res.json();
   allNotes = data.notes;
   total    = data.total;
@@ -1067,7 +1059,7 @@ async function init() {
   noSong.style.display = 'none';
 
   const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${wsProto}://${location.host}/ws`);
+  ws = new WebSocket(`${wsProto}://${location.host}/ws?session=${SESSION_ID}`);
 
   ws.onopen = () => {
     connDiv.textContent = `Connected · ${midiStatus}`;

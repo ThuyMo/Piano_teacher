@@ -4,6 +4,7 @@ Usage: python app.py  →  http://localhost:8000
 """
 import asyncio
 import base64
+from dataclasses import dataclass, field
 import json
 import os
 import queue
@@ -211,66 +212,70 @@ def _group_notes(notes: list, tol: float = 0.05) -> list:
     return groups
 
 
-# ─── Game state ───────────────────────────────────────────────────────────────
+# ─── Per-session game state ───────────────────────────────────────────────────
 
-notes_data   = []
-groups       = []
-clients      = set()
-midi_q       = queue.Queue()
-active_notes = set()
+@dataclass
+class GameSession:
+    session_id:          str
+    # MIDI data
+    notes_data:          list        = field(default_factory=list)
+    groups:              list        = field(default_factory=list)
+    midi_q:              queue.Queue = field(default_factory=queue.Queue)
+    active_notes:        set         = field(default_factory=set)
+    # Game state machine
+    g_time:              float       = 0.0
+    g_status:            str         = 'PLAYING'
+    g_idx:               int         = 0
+    g_score:             int         = 0
+    g_hit:               set         = field(default_factory=set)
+    # Settings
+    g_tempo:             float       = 1.0
+    g_hand:              str         = 'RH'
+    g_current_song:      str         = ''
+    g_current_path:      str         = ''
+    # Teacher-agent tracking
+    g_wrong_notes:       list        = field(default_factory=list)
+    g_section_mistakes:  dict        = field(default_factory=dict)
+    g_section_hit_times: dict        = field(default_factory=dict)
+    g_last_wrong:        object      = None
+    g_last_wrong_at:     float       = -999.0
+    g_wait_started_at:   float       = 0.0
+    # Pre-computed feedback
+    g_feedback_cache:    object      = None
+    g_feedback_future:   object      = None
+    # Test mode
+    g_test_mode:         bool        = False
+    g_test_presses:      list        = field(default_factory=list)
+    g_lh_notes:          list        = field(default_factory=list)
+    # WebSocket + task
+    ws:                  object      = None
+    loop_task:           object      = None
+    last_active:         float       = 0.0
 
-g_time             = 0.0
-g_status           = 'PLAYING'
-g_idx              = 0
-g_score            = 0
-g_hit              = set()
 
-# Teacher-agent extensions
-g_tempo             = 1.0        # playback speed multiplier (0.5 / 0.75 / 1.0)
-g_hand              = 'RH'       # 'RH' | 'LH' | 'BOTH'
-g_current_song      = ''         # base stem (without _RH/_LH)
-g_current_path      = ''         # full path of loaded MIDI
-g_wrong_notes       = []         # [{group_idx, pressed, required, time}]
-g_section_mistakes  = {}         # group_idx -> mistake count
-g_section_hit_times = {}         # group_idx -> reaction time (seconds)
-g_last_wrong        = None       # last wrong-note payload
-g_last_wrong_at     = -999.0     # loop wall-clock time of last wrong note
-g_wait_started_at   = 0.0        # loop wall-clock time when WAITING began
-
-# Pre-computed feedback (kicked off the moment game reaches FINISHED)
-g_feedback_cache: dict | None = None
-g_feedback_future: asyncio.Future | None = None
-
-# Test mode (no hints, auto-advance, records user presses for LLM scoring)
-g_test_mode:    bool = False
-g_test_presses: list = []   # [(game_time_float, pitch_int)]
-g_lh_notes:     list = []   # raw notes from LH file, used for auto-play in test mode
+sessions: dict[str, GameSession] = {}
 
 
-def _reset_game(path: str) -> None:
-    global notes_data, groups, g_time, g_status, g_idx, g_score, g_hit
-    global g_wrong_notes, g_section_mistakes, g_section_hit_times
-    global g_last_wrong, g_last_wrong_at, g_current_song, g_current_path
-    global g_wait_started_at, g_feedback_cache, g_feedback_future
-    global g_test_mode, g_test_presses, g_lh_notes
+def _get_or_create_session(session_id: str) -> GameSession:
+    if session_id not in sessions:
+        sessions[session_id] = GameSession(session_id=session_id)
+    return sessions[session_id]
 
-    g_current_path = path
 
-    # Tag each note with its hand so the frontend can colour by hand.
-    # For BOTH: merge _RH.mid + _LH.mid; for a single hand: tag from current file.
-    base_dir = Path(path).parent
-    stem_raw = Path(path).stem
-    song_stem = stem_raw
-    # Strip pipeline suffixes (_processed, _transposed, _RH, _LH) in any order
-    changed = True
+def _reset_session(sess: GameSession, path: str) -> None:
+    sess.g_current_path = path
+
+    base_dir  = Path(path).parent
+    song_stem = Path(path).stem
+    changed   = True
     while changed:
         changed = False
         for suffix in ('_processed', '_transposed', '_RH', '_LH'):
             if song_stem.endswith(suffix):
                 song_stem = song_stem[:-len(suffix)]
-                changed = True
+                changed   = True
 
-    if g_hand == 'BOTH':
+    if sess.g_hand == 'BOTH':
         rh_p = base_dir / f"{song_stem}_RH_processed.mid"
         if not _file_exists(rh_p):
             rh_p = base_dir / f"{song_stem}_RH.mid"
@@ -279,30 +284,29 @@ def _reset_game(path: str) -> None:
             lh_p = base_dir / f"{song_stem}_LH.mid"
         rh_notes = [dict(n, hand='RH') for n in _load_notes(str(rh_p))] if _file_exists(rh_p) else []
         lh_notes = [dict(n, hand='LH') for n in _load_notes(str(lh_p))] if _file_exists(lh_p) else []
-        notes_data = sorted(rh_notes + lh_notes, key=lambda x: x['start'])
+        sess.notes_data = sorted(rh_notes + lh_notes, key=lambda x: x['start'])
     else:
-        tag = 'LH' if g_hand == 'LH' else 'RH'
-        notes_data = [dict(n, hand=tag) for n in _load_notes(path)]
+        tag = 'LH' if sess.g_hand == 'LH' else 'RH'
+        sess.notes_data = [dict(n, hand=tag) for n in _load_notes(path)]
 
-    groups         = _group_notes(notes_data)
-    g_time         = (groups[0]['time'] - 4.0) if groups else 0.0
-    g_status       = 'PLAYING'
-    g_idx          = 0
-    g_score        = 0
-    g_hit          = set()
-    g_wrong_notes       = []
-    g_section_mistakes  = {}
-    g_section_hit_times = {}
-    g_last_wrong        = None
-    g_last_wrong_at     = -999.0
-    g_wait_started_at   = 0.0
-    g_feedback_cache    = None
-    g_feedback_future   = None
-    g_test_mode         = False
-    g_test_presses      = []
-    g_lh_notes          = []
-
-    g_current_song = song_stem
+    sess.groups              = _group_notes(sess.notes_data)
+    sess.g_time              = (sess.groups[0]['time'] - 4.0) if sess.groups else 0.0
+    sess.g_status            = 'PLAYING'
+    sess.g_idx               = 0
+    sess.g_score             = 0
+    sess.g_hit               = set()
+    sess.g_wrong_notes       = []
+    sess.g_section_mistakes  = {}
+    sess.g_section_hit_times = {}
+    sess.g_last_wrong        = None
+    sess.g_last_wrong_at     = -999.0
+    sess.g_wait_started_at   = 0.0
+    sess.g_feedback_cache    = None
+    sess.g_feedback_future   = None
+    sess.g_test_mode         = False
+    sess.g_test_presses      = []
+    sess.g_lh_notes          = []
+    sess.g_current_song      = song_stem
 
 
 # ─── yt-dlp helpers ───────────────────────────────────────────────────────────
@@ -386,6 +390,7 @@ def _download_audio(url: str, output_path: str) -> None:
 # ─── Background task tracking ────────────────────────────────────────────────
 
 tasks: dict       = {}
+_task_refs: dict  = {}   # asyncio.Task references keyed by task_id
 _mp3_cache: dict  = {}
 
 
@@ -645,18 +650,30 @@ def _download_song(song_name: str, output_path: Path, on_progress=None) -> str:
         ) from ytd_err
 
 
+def _is_cancelled(task_id: str) -> bool:
+    return tasks.get(task_id, {}).get("status") == "cancelled"
+
+
 async def _process_audio_task(task_id: str, input_path: Path) -> None:
     try:
+        if _is_cancelled(task_id):
+            return
         tasks[task_id]["step"] = "Đang nhận diện nốt nhạc (60s đầu)… ~20-40s"
         midi_path = await asyncio.to_thread(convert_audio_to_midi, str(input_path))
 
+        if _is_cancelled(task_id):
+            return
         tasks[task_id]["step"] = "Splitting hands..."
         rh_path = await asyncio.to_thread(extract_right_hand, str(midi_path))
 
+        if _is_cancelled(task_id):
+            return
         tasks[task_id]["step"] = "Analysing notes..."
         tonic, mode = await asyncio.to_thread(chord_detector, str(rh_path))
         df = await asyncio.to_thread(mid_to_pd, str(rh_path))
 
+        if _is_cancelled(task_id):
+            return
         tasks[task_id] = {
             "status": "done",
             "file":   rh_path.name,
@@ -664,8 +681,12 @@ async def _process_audio_task(task_id: str, input_path: Path) -> None:
             "notes":  int(len(df)),
             "median_duration": round(float(df['duration'].median()), 3),
         }
+    except asyncio.CancelledError:
+        tasks[task_id] = {"status": "cancelled"}
     except Exception as exc:
         tasks[task_id] = {"status": "error", "error": str(exc)}
+    finally:
+        _task_refs.pop(task_id, None)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -691,8 +712,9 @@ async def learning_path_page():
 
 
 @app.get("/notes")
-async def get_notes():
-    return JSONResponse({"notes": notes_data, "total": len(groups)})
+async def get_notes(session: str = ""):
+    sess = _get_or_create_session(session)
+    return JSONResponse({"notes": sess.notes_data, "total": len(sess.groups)})
 
 
 @app.get("/api/files")
@@ -743,6 +765,7 @@ async def list_files():
 class LoadRequest(BaseModel):
     file: str
     hand: str = 'RH'
+    session_id: str = ""
 
 
 class SongRequest(BaseModel):
@@ -751,10 +774,12 @@ class SongRequest(BaseModel):
 
 class TempoRequest(BaseModel):
     tempo: float   # 0.5 | 0.75 | 1.0
+    session_id: str = ""
 
 
 class HandRequest(BaseModel):
     hand: str      # 'RH' | 'LH' | 'BOTH'
+    session_id: str = ""
 
 class DownloadRequest(BaseModel):
     url: str
@@ -764,27 +789,34 @@ class LoadPieceRequest(BaseModel):
     file: str
     piece_index: int
     total_pieces: int
+    session_id: str = ""
 
 
 @app.post("/load")
 async def load_file(req: LoadRequest):
-    global g_hand
     path = ARTIFACT_DIR / req.file
     if not _file_exists(path):
         return JSONResponse({"error": "File not found"}, status_code=404)
-    g_hand = req.hand
-    _reset_game(str(path))
+    sess = _get_or_create_session(req.session_id)
+    sess.g_hand = req.hand
+    _reset_session(sess, str(path))
     return JSONResponse({"ok": True})
 
 
 async def _run_pipeline(input_path: Path, task_id: str) -> None:
     try:
+        if _is_cancelled(task_id):
+            return
         tasks[task_id]["step"] = "Converting audio to MIDI (ffmpeg + transkun)..."
         midi_path = await asyncio.to_thread(convert_audio_to_midi, str(input_path))
 
+        if _is_cancelled(task_id):
+            return
         tasks[task_id]["step"] = "Splitting hands..."
         rh_path = await asyncio.to_thread(extract_right_hand, str(midi_path))
 
+        if _is_cancelled(task_id):
+            return
         tasks[task_id]["step"] = "Detecting key and transposing..."
         tonic, mode = await asyncio.to_thread(chord_detector, str(rh_path))
         target = "Am" if mode == "minor" else "C"
@@ -793,6 +825,8 @@ async def _run_pipeline(input_path: Path, task_id: str) -> None:
             str(ARTIFACT_DIR / (rh_path.stem + "_transposed.mid"))
         )
 
+        if _is_cancelled(task_id):
+            return
         tasks[task_id]["step"] = "Processing notes for beginner..."
         df = await asyncio.to_thread(mid_to_pd, str(transposed_path))
         processed_df = df.loc[df.groupby('grouped_time')['pitch'].idxmax()].reset_index(drop=True)
@@ -800,6 +834,8 @@ async def _run_pipeline(input_path: Path, task_id: str) -> None:
         processed_path = ARTIFACT_DIR / (rh_path.stem + "_processed.mid")
         await asyncio.to_thread(str_to_mid, processed_str, str(processed_path))
 
+        if _is_cancelled(task_id):
+            return
         # Also process LH with the same key so hand-switching stays in tune
         lh_raw = rh_path.parent / (rh_path.stem.replace('_RH', '_LH') + '.mid')
         if _file_exists(lh_raw):
@@ -812,6 +848,8 @@ async def _run_pipeline(input_path: Path, task_id: str) -> None:
             lh_processed_path = ARTIFACT_DIR / (lh_raw.stem + "_processed.mid")
             await asyncio.to_thread(str_to_mid, pd_to_str(lh_processed_df), str(lh_processed_path))
 
+        if _is_cancelled(task_id):
+            return
         tasks[task_id] = {
             "status": "done",
             "file":   processed_path.name,
@@ -819,107 +857,115 @@ async def _run_pipeline(input_path: Path, task_id: str) -> None:
             "notes":  int(len(processed_df)),
             "median_duration": round(float(processed_df['duration'].median()), 3),
         }
+    except asyncio.CancelledError:
+        tasks[task_id] = {"status": "cancelled"}
     except Exception as exc:
         tasks[task_id] = {"status": "error", "error": str(exc)}
+    finally:
+        _task_refs.pop(task_id, None)
 @app.post("/set-tempo")
 async def set_tempo(req: TempoRequest):
-    global g_tempo
-    g_tempo = max(0.25, min(1.0, req.tempo))
-    return JSONResponse({"tempo": g_tempo})
+    sess = _get_or_create_session(req.session_id)
+    sess.g_tempo = max(0.25, min(1.0, req.tempo))
+    return JSONResponse({"tempo": sess.g_tempo})
 
 
 @app.post("/set-hand")
 async def set_hand_route(req: HandRequest):
-    global g_hand
     if req.hand not in ('RH', 'LH', 'BOTH'):
         return JSONResponse({"error": "Invalid hand"}, status_code=400)
-    if not g_current_song:
+    sess = _get_or_create_session(req.session_id)
+    if not sess.g_current_song:
         return JSONResponse({"error": "No song loaded"}, status_code=400)
 
-    g_hand = req.hand
+    sess.g_hand = req.hand
+    song = sess.g_current_song
 
     if req.hand == 'RH':
-        candidates = [ARTIFACT_DIR / f"{g_current_song}_RH_processed.mid",
-                      ARTIFACT_DIR / f"{g_current_song}_RH.mid",
-                      ARTIFACT_DIR / f"{g_current_song}.mid"]
+        candidates = [ARTIFACT_DIR / f"{song}_RH_processed.mid",
+                      ARTIFACT_DIR / f"{song}_RH.mid",
+                      ARTIFACT_DIR / f"{song}.mid"]
     elif req.hand == 'LH':
-        candidates = [ARTIFACT_DIR / f"{g_current_song}_LH_processed.mid",
-                      ARTIFACT_DIR / f"{g_current_song}_LH.mid",
-                      ARTIFACT_DIR / f"{g_current_song}.mid"]
-    else:  # BOTH — pass the RH processed file; _reset_game will merge both
-        candidates = [ARTIFACT_DIR / f"{g_current_song}_RH_processed.mid",
-                      ARTIFACT_DIR / f"{g_current_song}_RH.mid",
-                      ARTIFACT_DIR / f"{g_current_song}.mid"]
+        candidates = [ARTIFACT_DIR / f"{song}_LH_processed.mid",
+                      ARTIFACT_DIR / f"{song}_LH.mid",
+                      ARTIFACT_DIR / f"{song}.mid"]
+    else:  # BOTH — pass the RH processed file; _reset_session will merge both
+        candidates = [ARTIFACT_DIR / f"{song}_RH_processed.mid",
+                      ARTIFACT_DIR / f"{song}_RH.mid",
+                      ARTIFACT_DIR / f"{song}.mid"]
 
     for p in candidates:
         if _file_exists(p):
-            _reset_game(str(p))
+            _reset_session(sess, str(p))
             return JSONResponse({"ok": True, "file": p.name})
 
     return JSONResponse({"error": "MIDI file not found for this hand"}, status_code=404)
 
 
+class RestartRequest(BaseModel):
+    session_id: str = ""
+
+
 @app.post("/restart")
-async def restart_game():
-    if not g_current_path:
+async def restart_game(req: RestartRequest = RestartRequest()):
+    sess = _get_or_create_session(req.session_id)
+    if not sess.g_current_path:
         return JSONResponse({"error": "No song loaded"}, status_code=400)
-    _reset_game(g_current_path)
+    _reset_session(sess, sess.g_current_path)
     return JSONResponse({"ok": True})
 
 
-def _build_stats() -> dict:
-    total     = len(groups)
-    correct   = g_score
-    wrong_cnt = len(g_wrong_notes)
+def _build_stats_for(sess: GameSession) -> dict:
+    total     = len(sess.groups)
+    correct   = sess.g_score
+    wrong_cnt = len(sess.g_wrong_notes)
     accuracy  = correct / total if total else 0.0
-    hard      = sorted(g_section_mistakes.items(), key=lambda x: x[1], reverse=True)[:3]
-    hard_times = [round(groups[i]['time'], 2) for i, _ in hard if i < len(groups)]
-    timings   = list(g_section_hit_times.values())
+    hard      = sorted(sess.g_section_mistakes.items(), key=lambda x: x[1], reverse=True)[:3]
+    hard_times = [round(sess.groups[i]['time'], 2) for i, _ in hard if i < len(sess.groups)]
+    timings   = list(sess.g_section_hit_times.values())
     avg_react = round(sum(timings) / len(timings), 3) if timings else 0.0
     return {
-        'song':              g_current_song,
-        'hand':              g_hand,
-        'tempo':             g_tempo,
-        'total':             total,
-        'correct':           correct,
-        'accuracy':          accuracy,
-        'wrong_count':       wrong_cnt,
-        'wrong_notes':       g_wrong_notes[-10:],
+        'song':               sess.g_current_song,
+        'hand':               sess.g_hand,
+        'tempo':              sess.g_tempo,
+        'total':              total,
+        'correct':            correct,
+        'accuracy':           accuracy,
+        'wrong_count':        wrong_cnt,
+        'wrong_notes':        sess.g_wrong_notes[-10:],
         'hard_section_times': hard_times,
-        'avg_reaction_time': avg_react,
+        'avg_reaction_time':  avg_react,
     }
 
 
-def _start_feedback_precompute() -> None:
+def _start_feedback_for(sess: GameSession) -> None:
     """Kick off LLM feedback computation the moment game finishes (non-blocking)."""
-    global g_feedback_cache, g_feedback_future
-    if not _llm or g_feedback_future is not None:
+    if not _llm or sess.g_feedback_future is not None:
         return
-    stats = _build_stats()
+    stats = _build_stats_for(sess)
     loop  = asyncio.get_event_loop()
-    g_feedback_future = loop.run_in_executor(None, _generate_ai_feedback, stats)
+    sess.g_feedback_future = loop.run_in_executor(None, _generate_ai_feedback, stats)
 
 
 @app.get("/session-feedback")
-async def session_feedback():
-    global g_feedback_cache, g_feedback_future
+async def session_feedback(session: str = ""):
+    sess = _get_or_create_session(session)
 
-    if not groups:
+    if not sess.groups:
         return JSONResponse({"error": "No song loaded"}, status_code=400)
 
-    stats = _build_stats()
+    stats = _build_stats_for(sess)
 
     ai = None
     if _llm:
-        # Use pre-computed result if available, else compute now
-        if g_feedback_cache is not None:
-            ai = g_feedback_cache
+        if sess.g_feedback_cache is not None:
+            ai = sess.g_feedback_cache
         else:
-            if g_feedback_future is None:
-                _start_feedback_precompute()
+            if sess.g_feedback_future is None:
+                _start_feedback_for(sess)
             try:
-                ai = await asyncio.wrap_future(g_feedback_future)
-                g_feedback_cache = ai
+                ai = await asyncio.wrap_future(sess.g_feedback_future)
+                sess.g_feedback_cache = ai
             except Exception as exc:
                 ai = {"error": str(exc)}
 
@@ -933,7 +979,8 @@ async def upload_audio(file: UploadFile = File(...)):
     content    = await file.read()
     input_path = UPLOADS_DIR / file.filename
     input_path.write_bytes(content)
-    asyncio.create_task(_process_audio_task(task_id, input_path))
+    t = asyncio.create_task(_process_audio_task(task_id, input_path))
+    _task_refs[task_id] = t
     return JSONResponse({"task_id": task_id})
 
 
@@ -948,6 +995,8 @@ async def download_song(req: SongRequest):
 
     async def pipeline():
         try:
+            if _is_cancelled(task_id):
+                return
             vid_id = _extract_video_id(query)
             cache_key = vid_id if vid_id else query.lower().strip()
             if cache_key in _mp3_cache and _file_exists(_mp3_cache[cache_key]):
@@ -968,17 +1017,35 @@ async def download_song(req: SongRequest):
                 input_path = stem_path.with_suffix(".mp3")
                 _mp3_cache[cache_key] = input_path
 
+            if _is_cancelled(task_id):
+                return
             await _process_audio_task(task_id, input_path)
+        except asyncio.CancelledError:
+            tasks[task_id] = {"status": "cancelled"}
         except Exception as exc:
             tasks[task_id] = {"status": "error", "error": str(exc)}
+        finally:
+            _task_refs.pop(task_id, None)
 
-    asyncio.create_task(pipeline())
+    t = asyncio.create_task(pipeline())
+    _task_refs[task_id] = t
     return JSONResponse({"task_id": task_id})
 
 
 @app.get("/status/{task_id}")
 async def task_status(task_id: str):
     return JSONResponse(tasks.get(task_id, {"status": "unknown"}))
+
+
+@app.post("/cancel/{task_id}")
+async def cancel_task(task_id: str):
+    if task_id not in tasks:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    tasks[task_id] = {"status": "cancelled"}
+    t = _task_refs.pop(task_id, None)
+    if t:
+        t.cancel()
+    return JSONResponse({"ok": True})
 
 
 @app.get("/api/search")
@@ -1019,22 +1086,30 @@ async def download_youtube(req: DownloadRequest):
 
     async def pipeline():
         try:
+            if _is_cancelled(task_id):
+                return
             safe_title = re.sub(r'[^\w\s-]', '', req.title)[:40].strip() or task_id
             audio_path = UPLOADS_DIR / f"{safe_title}_{task_id}.mp3"
-            # Try YouTube with robust mobile-client downloader (cookies + retry)
             tasks[task_id]["step"] = "Downloading from YouTube..."
             try:
                 await asyncio.to_thread(_ytdlp_download, req.title, audio_path)
             except Exception:
-                # YouTube blocked on datacenter IP — fallback to SoundCloud
+                if _is_cancelled(task_id):
+                    return
                 tasks[task_id]["step"] = "YouTube unavailable, trying SoundCloud..."
                 await asyncio.to_thread(_soundcloud_download, req.title, audio_path)
+            if _is_cancelled(task_id):
+                return
+            await _run_pipeline(audio_path, task_id)
+        except asyncio.CancelledError:
+            tasks[task_id] = {"status": "cancelled"}
         except Exception as exc:
             tasks[task_id] = {"status": "error", "error": str(exc)}
-            return
-        await _run_pipeline(audio_path, task_id)
+        finally:
+            _task_refs.pop(task_id, None)
 
-    asyncio.create_task(pipeline())
+    t = asyncio.create_task(pipeline())
+    _task_refs[task_id] = t
     return JSONResponse({"task_id": task_id})
 
 
@@ -1045,16 +1120,24 @@ async def download_soundcloud_api(req: DownloadRequest):
 
     async def pipeline():
         try:
+            if _is_cancelled(task_id):
+                return
             safe_title = re.sub(r'[^\w\s-]', '', req.title)[:40].strip() or task_id
             audio_path = UPLOADS_DIR / f"{safe_title}_{task_id}.mp3"
             tasks[task_id]["step"] = "Downloading audio from SoundCloud..."
             await asyncio.to_thread(_download_audio, req.url, str(audio_path))
+            if _is_cancelled(task_id):
+                return
+            await _run_pipeline(audio_path, task_id)
+        except asyncio.CancelledError:
+            tasks[task_id] = {"status": "cancelled"}
         except Exception as exc:
             tasks[task_id] = {"status": "error", "error": str(exc)}
-            return
-        await _run_pipeline(audio_path, task_id)
+        finally:
+            _task_refs.pop(task_id, None)
 
-    asyncio.create_task(pipeline())
+    t = asyncio.create_task(pipeline())
+    _task_refs[task_id] = t
     return JSONResponse({"task_id": task_id})
 
 
@@ -1125,7 +1208,8 @@ async def load_piece_route(req: LoadPieceRequest):
         return JSONResponse({"error": "File not found"}, status_code=404)
     try:
         piece_path = _extract_piece(str(midi_path), req.piece_index, req.total_pieces)
-        _reset_game(str(piece_path))
+        sess = _get_or_create_session(req.session_id)
+        _reset_session(sess, str(piece_path))
         return JSONResponse({"ok": True})
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -1133,6 +1217,7 @@ async def load_piece_route(req: LoadPieceRequest):
 
 class TestModeRequest(BaseModel):
     enabled: bool = True
+    session_id: str = ""
 
 
 def _generate_test_feedback(group_results: list, accuracy: float, song: str) -> dict:
@@ -1193,32 +1278,33 @@ def _generate_test_feedback(group_results: list, accuracy: float, song: str) -> 
 
 @app.post("/set-test-mode")
 async def set_test_mode_route(req: TestModeRequest):
-    global g_test_mode, g_test_presses, g_lh_notes
-    g_test_mode    = req.enabled
-    g_test_presses = []
-    g_lh_notes     = []
-    if req.enabled and g_current_song:
-        lh_path = ARTIFACT_DIR / f"{g_current_song}_LH_processed.mid"
+    sess = _get_or_create_session(req.session_id)
+    sess.g_test_mode    = req.enabled
+    sess.g_test_presses = []
+    sess.g_lh_notes     = []
+    if req.enabled and sess.g_current_song:
+        lh_path = ARTIFACT_DIR / f"{sess.g_current_song}_LH_processed.mid"
         if not _file_exists(lh_path):
-            lh_path = ARTIFACT_DIR / f"{g_current_song}_LH.mid"
+            lh_path = ARTIFACT_DIR / f"{sess.g_current_song}_LH.mid"
         if _file_exists(lh_path):
-            g_lh_notes = _load_notes(str(lh_path))
-    return JSONResponse({"ok": True, "test_mode": g_test_mode, "has_lh": bool(g_lh_notes)})
+            sess.g_lh_notes = _load_notes(str(lh_path))
+    return JSONResponse({"ok": True, "test_mode": sess.g_test_mode, "has_lh": bool(sess.g_lh_notes)})
 
 
 @app.get("/test-result")
-async def get_test_result():
-    if not groups:
+async def get_test_result(session: str = ""):
+    sess = _get_or_create_session(session)
+    if not sess.groups:
         return JSONResponse({"error": "No song loaded"}, status_code=400)
 
-    WINDOW = 0.6   # seconds around each note group to match user presses
+    WINDOW = 0.6
     group_results = []
     total_correct = 0
-    for grp in groups:
+    for grp in sess.groups:
         expected = set(n['pitch'] for n in grp['notes'])
         t = grp['time']
         pressed = set(
-            pitch for (pt, pitch) in g_test_presses
+            pitch for (pt, pitch) in sess.g_test_presses
             if abs(pt - t) <= WINDOW
         )
         correct = expected & pressed
@@ -1238,13 +1324,13 @@ async def get_test_result():
             'ok':       ok,
         })
 
-    accuracy = total_correct / len(groups) if groups else 0.0
+    accuracy = total_correct / len(sess.groups) if sess.groups else 0.0
 
     ai = None
     if _llm:
         try:
             ai = await asyncio.to_thread(
-                _generate_test_feedback, group_results, accuracy, g_current_song
+                _generate_test_feedback, group_results, accuracy, sess.g_current_song
             )
         except Exception as e:
             ai = {"score": round(accuracy * 100), "feedback": str(e),
@@ -1252,12 +1338,12 @@ async def get_test_result():
     else:
         ai = {
             "score": round(accuracy * 100),
-            "feedback": f"{total_correct}/{len(groups)} nhóm nốt chính xác.",
+            "feedback": f"{total_correct}/{len(sess.groups)} nhóm nốt chính xác.",
             "weak_points": [], "practice_tips": [],
         }
 
     return JSONResponse({
-        "total_groups": len(groups),
+        "total_groups": len(sess.groups),
         "correct":      total_correct,
         "accuracy":     round(accuracy, 4),
         "ai":           ai,
@@ -1269,7 +1355,18 @@ async def get_test_result():
 @app.websocket("/ws")
 async def ws_handler(websocket: WebSocket):
     await websocket.accept()
-    clients.add(websocket)
+    session_id = websocket.query_params.get("session", "")
+    if not session_id:
+        await websocket.close(code=1008)
+        return
+
+    sess = _get_or_create_session(session_id)
+    sess.ws = websocket
+    sess.last_active = asyncio.get_event_loop().time()
+
+    loop_task = asyncio.create_task(session_loop(sess))
+    sess.loop_task = loop_task
+
     try:
         while True:
             raw = await websocket.receive_text()
@@ -1277,154 +1374,144 @@ async def ws_handler(websocket: WebSocket):
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
+            sess.last_active = asyncio.get_event_loop().time()
             if msg.get("type") == "midi":
                 note     = int(msg.get("note"))
                 velocity = int(msg.get("velocity", 0))
                 event    = msg.get("event")
                 if event == "note_on" and velocity > 0:
-                    midi_q.put(mido.Message("note_on", note=note, velocity=velocity))
+                    sess.midi_q.put(mido.Message("note_on",  note=note, velocity=velocity))
                 elif event in {"note_off", "note_on"}:
-                    midi_q.put(mido.Message("note_off", note=note, velocity=0))
+                    sess.midi_q.put(mido.Message("note_off", note=note, velocity=0))
     except WebSocketDisconnect:
         pass
     finally:
-        clients.discard(websocket)
+        loop_task.cancel()
+        sess.ws = None
 
 
-# ─── Game loop ────────────────────────────────────────────────────────────────
+# ─── Per-session game loop ────────────────────────────────────────────────────
 
-async def game_loop():
-    global g_time, g_status, g_idx, g_score, g_hit
-    global g_last_wrong, g_last_wrong_at, g_wait_started_at
-
+async def session_loop(sess: GameSession):
     last = asyncio.get_event_loop().time()
 
-    while True:
-        await asyncio.sleep(1 / 30)
-        now  = asyncio.get_event_loop().time()
-        dt   = now - last
-        last = now
+    try:
+        while sess.ws is not None:
+            await asyncio.sleep(1 / 30)
+            now  = asyncio.get_event_loop().time()
+            dt   = now - last
+            last = now
 
-        # Drain MIDI queue
-        new_presses = []
-        while True:
-            try:
-                msg = midi_q.get_nowait()
-                if msg.type == 'note_on' and msg.velocity > 0:
-                    active_notes.add(msg.note)
-                    new_presses.append(msg.note)
-                elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
-                    active_notes.discard(msg.note)
-            except queue.Empty:
-                break
-
-        # In test mode: record every key press with its game timestamp
-        if g_test_mode:
-            for p in new_presses:
-                g_test_presses.append((g_time, p))
-
-        # ── State machine ──────────────────────────────────────────────────────
-        if g_status == 'PLAYING':
-            g_time += dt * g_tempo          # tempo scaling
-            if g_idx >= len(groups):
-                g_status = 'FINISHED'
-                _start_feedback_precompute()
-            elif g_time >= groups[g_idx]['time']:
-                if g_test_mode:
-                    # Auto-advance: don't pause, keep the music rolling
-                    while g_idx < len(groups) and g_time >= groups[g_idx]['time']:
-                        g_idx += 1
-                    if g_idx >= len(groups):
-                        g_status = 'FINISHED'
-                        _start_feedback_precompute()
-                else:
-                    g_time          = groups[g_idx]['time']
-                    g_status        = 'WAITING'
-                    g_hit           = set()
-                    g_wait_started_at = now
-
-        elif g_status == 'WAITING':
-            required = {n['pitch'] for n in groups[g_idx]['notes']}
-            group_pitches = [n['pitch'] for n in groups[g_idx]['notes']]
-
-            for p in new_presses:
-                if p in required:
-                    g_hit.add(p)
-                else:
-                    # ── Wrong note detected ────────────────────────────────────
-                    g_section_mistakes[g_idx] = g_section_mistakes.get(g_idx, 0) + 1
-
-                    # Suggest finger for the first still-needed correct note
-                    still_needed = list(required - g_hit)
-                    target = min(still_needed) if still_needed else (min(required) if required else p)
-                    finger = _suggest_finger(target, group_pitches, g_hand)
-
-                    g_last_wrong = {
-                        'pressed':  p,
-                        'required': list(required),
-                        'finger':   finger,
-                        'hand':     g_hand,
-                    }
-                    g_last_wrong_at = now
-                    g_wrong_notes.append({
-                        **g_last_wrong,
-                        'group_idx': g_idx,
-                        'time':      g_time,
-                    })
-
-            if g_hit >= required:
-                # Track reaction time for this group
-                g_section_hit_times[g_idx] = round(now - g_wait_started_at, 3)
-                g_score  += 1
-                g_idx    += 1
-                if g_idx < len(groups):
-                    g_status = 'PLAYING'
-                else:
-                    g_status = 'FINISHED'
-                    _start_feedback_precompute()
-
-        # ── Build payload ──────────────────────────────────────────────────────
-        wait_pitches = (
-            [n['pitch'] for n in groups[g_idx]['notes']]
-            if g_status == 'WAITING' and g_idx < len(groups) else []
-        )
-        cur_mistakes = g_section_mistakes.get(g_idx, 0) if g_idx < len(groups) else 0
-
-        show_wrong = (now - g_last_wrong_at) < 2.0
-
-        # LH auto-play for test mode: which LH pitches are sounding right now
-        lh_auto = (
-            [n['pitch'] for n in g_lh_notes if n['start'] <= g_time <= n['end']]
-            if g_test_mode and g_lh_notes else []
-        )
-
-        payload = json.dumps({
-            'type':             'state',
-            'game_time':        g_time,
-            'status':           g_status,
-            'score':            g_score,
-            'total':            len(groups),
-            'active_notes':     list(active_notes),
-            'wait_pitches':     wait_pitches,
-            'hit_pitches':      list(g_hit),
-            # Teacher extensions
-            'wrong_note':       g_last_wrong if show_wrong else None,
-            'section_mistakes': cur_mistakes,
-            'suggest_slow':     cur_mistakes >= 3 and g_status == 'WAITING',
-            'tempo':            g_tempo,
-            'hand':             g_hand,
-            'test_mode':        g_test_mode,
-            'lh_auto':          lh_auto,
-        })
-
-        if clients:
-            dead = set()
-            for ws in list(clients):
+            # Drain MIDI queue
+            new_presses = []
+            while True:
                 try:
-                    await ws.send_text(payload)
+                    msg = sess.midi_q.get_nowait()
+                    if msg.type == 'note_on' and msg.velocity > 0:
+                        sess.active_notes.add(msg.note)
+                        new_presses.append(msg.note)
+                    elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
+                        sess.active_notes.discard(msg.note)
+                except queue.Empty:
+                    break
+
+            # In test mode: record every key press with its game timestamp
+            if sess.g_test_mode:
+                for p in new_presses:
+                    sess.g_test_presses.append((sess.g_time, p))
+
+            # ── State machine ──────────────────────────────────────────────────
+            if sess.g_status == 'PLAYING':
+                sess.g_time += dt * sess.g_tempo
+                if sess.g_idx >= len(sess.groups):
+                    sess.g_status = 'FINISHED'
+                    _start_feedback_for(sess)
+                elif sess.g_time >= sess.groups[sess.g_idx]['time']:
+                    if sess.g_test_mode:
+                        while sess.g_idx < len(sess.groups) and sess.g_time >= sess.groups[sess.g_idx]['time']:
+                            sess.g_idx += 1
+                        if sess.g_idx >= len(sess.groups):
+                            sess.g_status = 'FINISHED'
+                            _start_feedback_for(sess)
+                    else:
+                        sess.g_time           = sess.groups[sess.g_idx]['time']
+                        sess.g_status         = 'WAITING'
+                        sess.g_hit            = set()
+                        sess.g_wait_started_at = now
+
+            elif sess.g_status == 'WAITING':
+                required      = {n['pitch'] for n in sess.groups[sess.g_idx]['notes']}
+                group_pitches = [n['pitch'] for n in sess.groups[sess.g_idx]['notes']]
+
+                for p in new_presses:
+                    if p in required:
+                        sess.g_hit.add(p)
+                    else:
+                        sess.g_section_mistakes[sess.g_idx] = sess.g_section_mistakes.get(sess.g_idx, 0) + 1
+                        still_needed = list(required - sess.g_hit)
+                        target = min(still_needed) if still_needed else (min(required) if required else p)
+                        finger = _suggest_finger(target, group_pitches, sess.g_hand)
+                        sess.g_last_wrong = {
+                            'pressed':  p,
+                            'required': list(required),
+                            'finger':   finger,
+                            'hand':     sess.g_hand,
+                        }
+                        sess.g_last_wrong_at = now
+                        sess.g_wrong_notes.append({
+                            **sess.g_last_wrong,
+                            'group_idx': sess.g_idx,
+                            'time':      sess.g_time,
+                        })
+
+                if sess.g_hit >= required:
+                    sess.g_section_hit_times[sess.g_idx] = round(now - sess.g_wait_started_at, 3)
+                    sess.g_score += 1
+                    sess.g_idx   += 1
+                    if sess.g_idx < len(sess.groups):
+                        sess.g_status = 'PLAYING'
+                    else:
+                        sess.g_status = 'FINISHED'
+                        _start_feedback_for(sess)
+
+            # ── Build payload ──────────────────────────────────────────────────
+            wait_pitches = (
+                [n['pitch'] for n in sess.groups[sess.g_idx]['notes']]
+                if sess.g_status == 'WAITING' and sess.g_idx < len(sess.groups) else []
+            )
+            cur_mistakes = sess.g_section_mistakes.get(sess.g_idx, 0) if sess.g_idx < len(sess.groups) else 0
+            show_wrong   = (now - sess.g_last_wrong_at) < 2.0
+            lh_auto      = (
+                [n['pitch'] for n in sess.g_lh_notes if n['start'] <= sess.g_time <= n['end']]
+                if sess.g_test_mode and sess.g_lh_notes else []
+            )
+
+            payload = json.dumps({
+                'type':             'state',
+                'game_time':        sess.g_time,
+                'status':           sess.g_status,
+                'score':            sess.g_score,
+                'total':            len(sess.groups),
+                'active_notes':     list(sess.active_notes),
+                'wait_pitches':     wait_pitches,
+                'hit_pitches':      list(sess.g_hit),
+                'wrong_note':       sess.g_last_wrong if show_wrong else None,
+                'section_mistakes': cur_mistakes,
+                'suggest_slow':     cur_mistakes >= 3 and sess.g_status == 'WAITING',
+                'tempo':            sess.g_tempo,
+                'hand':             sess.g_hand,
+                'test_mode':        sess.g_test_mode,
+                'lh_auto':          lh_auto,
+            })
+
+            if sess.ws is not None:
+                try:
+                    await sess.ws.send_text(payload)
                 except Exception:
-                    dead.add(ws)
-            clients.difference_update(dead)
+                    break
+
+    except asyncio.CancelledError:
+        pass
 
 
 # ─── Physical MIDI listener ───────────────────────────────────────────────────
@@ -1441,12 +1528,23 @@ def _midi_listener():
     print(f"MIDI controller: {ports[0]}")
     with mido.open_input(ports[0]) as port:
         for msg in port:
-            midi_q.put(msg)
+            for s in list(sessions.values()):
+                s.midi_q.put(msg)
+
+
+async def _cleanup_sessions():
+    while True:
+        await asyncio.sleep(120)
+        now  = asyncio.get_event_loop().time()
+        dead = [sid for sid, s in list(sessions.items())
+                if s.ws is None and now - s.last_active > 300]
+        for sid in dead:
+            sessions.pop(sid, None)
 
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(game_loop())
+    asyncio.create_task(_cleanup_sessions())
     if os.getenv("ENABLE_MIDI_INPUT", "").lower() in {"1", "true", "yes", "on"}:
         threading.Thread(target=_midi_listener, daemon=True).start()
 

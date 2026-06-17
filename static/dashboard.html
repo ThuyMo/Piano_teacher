@@ -480,6 +480,14 @@
           "></div>
         </div>
         <div id="searchProgressStep" style="font-style:italic; font-size:12px; color:#b0a0c8;"></div>
+        <div style="margin-top:12px; text-align:right;">
+          <button id="cancelSearchBtn" onclick="cancelTask('search')" style="
+            background:transparent; border:1px solid rgba(200,100,100,0.35);
+            color:#c06060; border-radius:8px; padding:5px 14px;
+            font-size:12px; cursor:pointer; transition:background 0.15s;
+          " onmouseover="this.style.background='rgba(200,100,100,0.12)'"
+             onmouseout="this.style.background='transparent'">✕ Huỷ</button>
+        </div>
       </div>
     </div>
   </div>
@@ -518,10 +526,18 @@
           "></div>
         </div>
         <div id="uploadProgressStep" style="font-style:italic; font-size:12px; color:#b0a0c8;"></div>
+        <div style="margin-top:12px; text-align:right;">
+          <button id="cancelUploadBtn" onclick="cancelTask('upload')" style="
+            background:transparent; border:1px solid rgba(200,100,100,0.35);
+            color:#c06060; border-radius:8px; padding:5px 14px;
+            font-size:12px; cursor:pointer; transition:background 0.15s;
+          " onmouseover="this.style.background='rgba(200,100,100,0.12)'"
+             onmouseout="this.style.background='transparent'">✕ Huỷ</button>
+        </div>
       </div>
     </div>
   </div>
-  
+
   <!-- File list -->
   <div class="section-label">♩ Available Songs</div>
   <div class="file-list" id="fileList">
@@ -700,7 +716,8 @@ async function useYouTube(url, title) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, title }),
   }).then(r => r.json());
-  pollStatus(task_id, { onStep: setSearchPct, onDone: () => unfreezeSearch(true), onErr: () => unfreezeSearch(false) });
+  _searchTaskId = task_id;
+  pollStatus(task_id, { onStep: setSearchPct, onDone: () => { _searchTaskId = null; unfreezeSearch(true); }, onErr: () => { _searchTaskId = null; unfreezeSearch(false); } });
 }
 
 async function useSoundCloud(url, title) {
@@ -710,7 +727,8 @@ async function useSoundCloud(url, title) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, title }),
   }).then(r => r.json());
-  pollStatus(task_id, { onStep: setSearchPct, onDone: () => unfreezeSearch(true), onErr: () => unfreezeSearch(false) });
+  _searchTaskId = task_id;
+  pollStatus(task_id, { onStep: setSearchPct, onDone: () => { _searchTaskId = null; unfreezeSearch(true); }, onErr: () => { _searchTaskId = null; unfreezeSearch(false); } });
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
@@ -750,10 +768,11 @@ async function processFile(file) {
   const form = new FormData();
   form.append('file', file);
   const { task_id } = await fetch('/upload', { method: 'POST', body: form }).then(r => r.json());
+  _uploadTaskId = task_id;
   pollStatus(task_id, {
     onStep: setUploadPct,
-    onDone: () => { setUploadPct(100, '✓ Hoàn tất!'); setTimeout(() => unfreezeUpload(true), 800); },
-    onErr:  () => unfreezeUpload(false),
+    onDone: () => { _uploadTaskId = null; setUploadPct(100, '✓ Hoàn tất!'); setTimeout(() => unfreezeUpload(true), 800); },
+    onErr:  () => { _uploadTaskId = null; unfreezeUpload(false); },
   });
 }
 
@@ -778,6 +797,24 @@ function showStatus(text, type = 'loading', file = null) {
   }
 }
 
+// ─── Task cancellation ────────────────────────────────────────────────────────
+let _searchTaskId = null, _uploadTaskId = null;
+
+async function cancelTask(type) {
+  const task_id = type === 'search' ? _searchTaskId : _uploadTaskId;
+  if (!task_id) return;
+  const btn = document.getElementById(type === 'search' ? 'cancelSearchBtn' : 'cancelUploadBtn');
+  if (btn) btn.disabled = true;
+  await fetch(`/cancel/${task_id}`, { method: 'POST' });
+  if (type === 'search') {
+    _searchTaskId = null;
+    unfreezeSearch(false);
+  } else {
+    _uploadTaskId = null;
+    unfreezeUpload(false);
+  }
+}
+
 async function pollStatus(task_id, callbacks = {}) {
   const { onStep, onDone, onErr } = callbacks;
   while (true) {
@@ -799,6 +836,11 @@ async function pollStatus(task_id, callbacks = {}) {
     }
     if (s.status === 'error') {
       showStatus(`Error: ${s.error}`, 'err');
+      if (onErr) onErr();
+      break;
+    }
+    if (s.status === 'cancelled') {
+      if (onStep) onStep(0, '✗ Đã huỷ');
       if (onErr) onErr();
       break;
     }
@@ -836,6 +878,14 @@ async function playFile(name) {
 }
 
 loadFiles();
+
+// Auto-search if ?q= is present (e.g. arriving from "Bài mới" in the game page)
+const _autoQ = new URLSearchParams(location.search).get('q');
+if (_autoQ) {
+  switchTab('search');
+  searchInput.value = _autoQ;
+  doSearch();
+}
 </script>
 </body>
 </html>

@@ -6,7 +6,7 @@
 
 ## Demo
 
-[![Watch the demo](https://img.shields.io/badge/▶%20Watch%20Demo-blue?style=for-the-badge)](https://github.com/ThuyMo/Piano_teacher)
+[![Watch the demo](https://vngms-my.sharepoint.com/:v:/g/personal/montt_vng_com_vn/IQBzDV-HnRM5Rbg028CyZAvdAc-TAUBIJl-UXfvnDaGxsG4?nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJPbmVEcml2ZUZvckJ1c2luZXNzIiwicmVmZXJyYWxBcHBQbGF0Zm9ybSI6IldlYiIsInJlZmVycmFsTW9kZSI6InZpZXciLCJyZWZlcnJhbFZpZXciOiJNeUZpbGVzTGlua0NvcHkifX0&e=bQmNbo)
 
 ---
 
@@ -27,7 +27,7 @@ Kết quả: người học bỏ cuộc sớm vì chán hoặc vì không có ti
 |----|-----------------|
 | **Người mới học piano** | Tìm bài nhạc yêu thích từ YouTube/SoundCloud, luyện tập tay phải hoặc tay trái riêng với nốt nhạc rơi trực quan |
 | **Giáo viên âm nhạc** | Tạo bài luyện tập cho học sinh từ bất kỳ bản audio nào, điều chỉnh tốc độ và chọn phần bài phù hợp trình độ |
-| **Người học trung cấp** | Luyện cả hai tay đồng thời, nhận phản hồi AI về tempo và điểm yếu cụ thể |
+| **Người học trung cấp** | Luyện cả hai tay đồng thời, dùng chế độ kiểm tra để AI đánh giá khả năng thực tế |
 
 ---
 
@@ -47,9 +47,17 @@ File audio (MP3/WAV/FLAC/M4A) được đưa qua pipeline xử lý tự động:
 1. **Audio → MIDI** — `ffmpeg` chuẩn hoá audio, `transkun` (AI model) nhận diện nốt nhạc
 2. **Tách tay** — thuật toán distance-based chia notes thành tay phải (`_RH.mid`) và tay trái (`_LH.mid`)
 3. **Chuyển tông** — tự động detect key, transpose về C major / A minor cho người mới dễ chơi
-4. **Đơn giản hoá** — chỉ giữ nốt cao nhất mỗi time group, phù hợp trình độ beginner
+4. **Đơn giản hoá** — RH giữ nốt cao nhất, LH giữ nốt thấp nhất mỗi time group, phù hợp trình độ beginner
 
-### 2. Chơi game — nốt nhạc rơi tương tác
+### 2. Learning Path — luyện tập có lộ trình
+
+Trang **Learning Path** chia bài nhạc thành các phần nhỏ (piece) để luyện từng đoạn:
+
+- Chọn từng piece (đoạn 1, đoạn 2, …) theo trình độ
+- **Chế độ luyện tập (Practice)**: game chờ nhấn đúng nốt, có gợi ý ngón tay, có cảnh báo khi sai liên tục
+- **Chế độ kiểm tra (Test)**: chơi tự do không có gợi ý — AI chấm điểm và đưa ra nhận xét chi tiết từng nốt
+
+### 3. Chơi game — nốt nhạc rơi tương tác
 
 Game hiển thị đàn piano 88 phím với nốt nhạc rơi từ trên xuống:
 
@@ -58,9 +66,9 @@ Game hiển thị đàn piano 88 phím với nốt nhạc rơi từ trên xuốn
 - **Xanh lá** — nhấn đúng
 - **Cam đỏ** — nhấn sai
 
-Chế độ **Wait Mode**: game tạm dừng và chờ người chơi nhấn đúng nốt trước khi tiếp tục — không bỏ lỡ nốt nào. Hỗ trợ đổi tay (RH/LH/Cả hai) ngay trong lúc chơi mà không cần tải lại bài.
+Chế độ **Wait Mode**: game tạm dừng và chờ người chơi nhấn đúng nốt trước khi tiếp tục. Hỗ trợ đổi tay (RH/LH/Cả hai) ngay trong lúc chơi — LH và BOTH đều dùng file đã transpose và simplify tương ứng.
 
-### 3. AI Coach — phản hồi thời gian thực
+### 4. AI Coach — phản hồi thời gian thực
 
 Sau mỗi section, **gemma-4-31b-it** phân tích kết quả chơi và đưa ra phản hồi:
 
@@ -68,23 +76,30 @@ Sau mỗi section, **gemma-4-31b-it** phân tích kết quả chơi và đưa ra
 - Nhận xét các nốt hay bị sai nhất
 - Khuyến khích khi người học tiến bộ
 
+Ở chế độ kiểm tra, AI phân tích từng nốt bấm sai/đúng theo timeline và đưa ra đánh giá toàn diện hơn.
+
 ### Architecture
 
 ```
 Browser (static/)
-  │  ← dashboard tìm kiếm nhạc, game piano canvas, UI điều khiển
+  │  ← dashboard tìm kiếm nhạc, learning path, game piano canvas
   │
   ├── HTTP (port 8080) ──→ FastAPI (app.py)
-  │                            ├── GET  /                → dashboard.html
-  │                            ├── POST /api/download    → tải YouTube/SoundCloud + pipeline
-  │                            ├── GET  /api/search      → tìm YouTube (yt-dlp)
+  │                            ├── GET  /                      → dashboard.html
+  │                            ├── GET  /learning_path         → learning_path.html
+  │                            ├── GET  /game                  → index.html (game)
+  │                            ├── POST /api/download          → tải YouTube/SoundCloud + pipeline
+  │                            ├── GET  /api/search            → tìm YouTube (yt-dlp)
   │                            ├── GET  /api/search-soundcloud → tìm SoundCloud
-  │                            ├── POST /load            → load bài vào game
-  │                            ├── POST /set-hand        → đổi tay RH/LH/BOTH
-  │                            ├── POST /set-tempo       → điều chỉnh tốc độ
-  │                            └── GET  /status/{id}     → poll tiến trình xử lý
+  │                            ├── GET  /api/pieces            → danh sách pieces của bài
+  │                            ├── POST /api/load_piece        → load một piece vào game
+  │                            ├── POST /set-hand              → đổi tay RH/LH/BOTH
+  │                            ├── POST /set-tempo             → điều chỉnh tốc độ
+  │                            ├── POST /set-test-mode         → bật/tắt chế độ kiểm tra
+  │                            ├── GET  /test-result           → kết quả chế độ kiểm tra
+  │                            └── GET  /status/{id}           → poll tiến trình xử lý
   │
-  └── WebSocket /ws ──→ Game loop (30fps)
+  └── WebSocket /ws ──→ Game loop (30fps, per-session)
                             ├── Nhận MIDI input từ browser (Web MIDI API)
                             ├── Tính toán hit/miss/wait state
                             ├── Broadcast piano state cho canvas render
@@ -96,9 +111,9 @@ Browser (static/)
 ```
 MP3/WAV/FLAC  →  ffmpeg  →  WAV  →  transkun  →  MIDI
      →  split_midi_hands  →  _RH.mid + _LH.mid
-     →  chord_detector    →  transpose sang C/Am
+     →  chord_detector    →  transpose sang C/Am (cả RH lẫn LH)
      →  mid_to_pd         →  đơn giản hoá beginner
-     →  _RH_processed.mid (file dùng trong game)
+     →  _RH_processed.mid + _LH_processed.mid (dùng trong game)
 ```
 
 ---
@@ -151,10 +166,10 @@ Truy cập `http://localhost:8080` trên trình duyệt.
 
 1. Tìm kiếm bài hát trên **YouTube** hoặc **SoundCloud** (hoặc upload file audio trực tiếp)
 2. Click **"Use this"** — hệ thống tải về và xử lý tự động (~30-60s)
-3. Bài xuất hiện trong danh sách "Processed Files" → click **▶ Play**
-4. Chọn tay (Tay phải / Tay trái / Cả hai), tốc độ, và phần bài muốn luyện
-5. Luyện tập — game chờ bạn nhấn đúng nốt trước khi tiếp tục
-6. Xem phản hồi AI sau mỗi section
+3. Bài xuất hiện trong danh sách → click **▶ Play** để vào Learning Path
+4. Chọn đoạn bài (piece), chọn tay (Tay phải / Tay trái / Cả hai) và tốc độ
+5. **Luyện tập**: game chờ bạn nhấn đúng nốt trước khi tiếp tục
+6. **Kiểm tra**: chơi tự do, AI chấm điểm và nhận xét sau khi hoàn thành
 
 ### Optional: Docker
 
@@ -239,7 +254,7 @@ Trong `app.py`, sửa `ytsearch5:` / `scsearch5:` thành số kết quả mong m
 
 ### Tắt chế độ đơn giản hoá beginner
 
-Trong `_run_pipeline` (app.py), bỏ dòng lọc nốt cao nhất để giữ nguyên tất cả nốt:
+Trong `_run_pipeline` (app.py), bỏ dòng lọc nốt để giữ nguyên tất cả nốt:
 
 ```python
 # Thay dòng này:
@@ -286,13 +301,15 @@ Piano_teacher/
 │
 ├── static/                   # Frontend
 │   ├── dashboard.html        # Trang chính: tìm kiếm nhạc, danh sách bài
+│   ├── learning_path.html    # Learning path: chọn piece, luyện tập / kiểm tra
 │   └── index.html            # Game piano: canvas render, WebSocket, MIDI input
 │
 ├── artifact/                 # MIDI files đã xử lý (sinh ra lúc runtime)
-│   ├── song_RH.mid           # Tay phải
-│   ├── song_LH.mid           # Tay trái
-│   ├── song_RH_transposed.mid
-│   └── song_RH_processed.mid # File dùng trong game (đơn giản hoá beginner)
+│   ├── song_RH.mid           # Tay phải (raw)
+│   ├── song_LH.mid           # Tay trái (raw)
+│   ├── song_RH_processed.mid # Tay phải đã transpose + simplify
+│   ├── song_LH_processed.mid # Tay trái đã transpose + simplify
+│   └── song_RH_processed_piece0.mid  # Piece được cắt ra để luyện
 │
 └── uploads/                  # Audio files tạm thời
 ```
@@ -305,21 +322,24 @@ Tất cả AI calls đi qua **GreenNode MaaS** tại `https://maas-llm-aiplatfor
 
 ```python
 # app.py — AI feedback sau mỗi section
-from openai import AsyncOpenAI
+from openai import OpenAI
 
-client = AsyncOpenAI(
+client = OpenAI(
     base_url=os.getenv("LLM_BASE_URL", "https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1"),
     api_key=os.getenv("LLM_API_KEY"),
 )
-response = await client.chat.completions.create(
+response = client.chat.completions.create(
     model=os.getenv("LLM_MODEL", "google/gemma-4-31b-it"),
     messages=[
-        {"role": "system", "content": "Bạn là giáo viên piano..."},
+        {"role": "system", "content": "/no_thinking"},
         {"role": "user",   "content": f"Kết quả section: {stats}"},
     ],
-    max_tokens=300,
-    temperature=0.7,
+    max_tokens=400,
+    temperature=0.3,
+    timeout=15,
 )
 ```
 
-**gemma-4-31b-it** xử lý một nhiệm vụ duy nhất: phân tích kết quả chơi của người dùng (điểm, nốt sai, tốc độ trung bình) và đưa ra lời khuyên ngắn gọn bằng tiếng Việt sau mỗi section luyện tập.
+**gemma-4-31b-it** xử lý hai nhiệm vụ:
+1. **Practice feedback** — phân tích kết quả chơi (điểm, nốt sai, tốc độ) và đưa ra lời khuyên ngắn gọn sau mỗi section
+2. **Test feedback** — đánh giá chi tiết từng nốt bấm theo timeline, chấm điểm tổng thể và gợi ý bài luyện tiếp theo
